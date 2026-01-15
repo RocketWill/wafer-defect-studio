@@ -8,9 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
+_SUPPORTED_SCHEMA_VERSIONS = (1, _SCHEMA_VERSION)
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
+_IMAGE_ASSETS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS image_assets ("
+    "image_asset_id TEXT NOT NULL PRIMARY KEY, "
+    "path TEXT NOT NULL, "
+    "width INTEGER NOT NULL, "
+    "height INTEGER NOT NULL, "
+    "dtype TEXT NOT NULL, "
+    "format TEXT NOT NULL, "
+    "fingerprint TEXT NOT NULL"
+    ")"
+)
 
 
 class ProjectError(ValueError):
@@ -54,6 +66,7 @@ def create_project(path: str | Path) -> ProjectInfo:
             "INSERT INTO project_metadata(project_id, schema_version) VALUES (?, ?)",
             (project_id, _SCHEMA_VERSION),
         )
+        connection.execute(_IMAGE_ASSETS_TABLE_SQL)
         connection.commit()
     except sqlite3.Error:
         connection.rollback()
@@ -82,17 +95,22 @@ def open_project(path: str | Path) -> ProjectInfo:
         metadata = connection.execute(
             "SELECT project_id, schema_version FROM project_metadata"
         ).fetchall()
+        has_image_assets_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'image_assets'"
+        ).fetchone() is not None
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
         connection.close()
 
-    if pragma_version != _SCHEMA_VERSION or len(metadata) != 1:
+    if pragma_version not in _SUPPORTED_SCHEMA_VERSIONS or len(metadata) != 1:
         raise ProjectError(f"Unsupported project schema: {database_path}")
 
     project_id, metadata_version = metadata[0]
     if metadata_version != pragma_version or not project_id:
         raise ProjectError(f"Invalid project metadata: {database_path}")
+    if pragma_version == _SCHEMA_VERSION and not has_image_assets_table:
+        raise ProjectError(f"Missing image asset table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 

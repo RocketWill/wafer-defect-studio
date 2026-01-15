@@ -14,7 +14,7 @@ class ProjectTest(unittest.TestCase):
             created = project.create_project(project_path)
 
             self.assertEqual(created.path, project_path.resolve())
-            self.assertEqual(created.schema_version, 1)
+            self.assertEqual(created.schema_version, 2)
             self.assertTrue(created.project_id)
             self.assertEqual(
                 {entry.name for entry in project_path.iterdir()},
