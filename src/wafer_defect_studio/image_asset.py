@@ -6,6 +6,7 @@ import hashlib
 import sqlite3
 import uuid
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from PySide6.QtGui import QImage, QImageReader
@@ -22,6 +23,12 @@ class ImageAssetError(ProjectError):
     """Raised when an external source cannot be registered as a wafer image."""
 
 
+class SourceHealth(Enum):
+    AVAILABLE = "available"
+    MISSING = "missing"
+    CHANGED = "changed"
+
+
 @dataclass(frozen=True)
 class ImageAsset:
     """Immutable metadata for an externally referenced wafer image."""
@@ -33,6 +40,14 @@ class ImageAsset:
     dtype: str
     format: str
     fingerprint: str
+
+
+@dataclass(frozen=True)
+class ReopenedWaferImage:
+    """Persisted image metadata paired with its current source health."""
+
+    asset: ImageAsset
+    source_health: SourceHealth
 
 
 def register_wafer_image(project_path: str | Path, source_path: str | Path) -> ImageAsset:
@@ -104,6 +119,49 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
         connection.close()
 
     return asset
+
+
+def load_image_assets(project_path: str | Path) -> tuple[ReopenedWaferImage, ...]:
+    """Reopen persisted image metadata and report source health without writing."""
+
+    project_info = open_project(project_path)
+    if project_info.schema_version == 1:
+        return ()
+
+    database_path = project_info.path / "project.sqlite"
+    try:
+        connection = sqlite3.connect(database_path.resolve().as_uri() + "?mode=ro", uri=True)
+    except sqlite3.Error as error:
+        raise ImageAssetError(f"Cannot open project database: {database_path}") from error
+    try:
+        rows = connection.execute(
+            "SELECT image_asset_id, path, width, height, dtype, format, fingerprint "
+            "FROM image_assets ORDER BY image_asset_id"
+        ).fetchall()
+    except sqlite3.Error as error:
+        raise ImageAssetError(f"Invalid image asset metadata: {database_path}") from error
+    finally:
+        connection.close()
+
+    reopened = []
+    for row in rows:
+        asset = ImageAsset(
+            image_asset_id=row[0],
+            path=Path(row[1]),
+            width=row[2],
+            height=row[3],
+            dtype=row[4],
+            format=row[5],
+            fingerprint=row[6],
+        )
+        if not asset.path.is_file():
+            health = SourceHealth.MISSING
+        elif _sha256(asset.path) == asset.fingerprint:
+            health = SourceHealth.AVAILABLE
+        else:
+            health = SourceHealth.CHANGED
+        reopened.append(ReopenedWaferImage(asset, health))
+    return tuple(reopened)
 
 
 def _sha256(path: Path) -> str:
