@@ -53,8 +53,8 @@ class WaferLoader(QObject):
         worker.failed.connect(lambda message, token=token: self.failed.emit(token, message))
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda token=token: self._cleanup(token))
+        thread.finished.connect(thread.deleteLater)
         self._threads[token] = thread
         self._workers[token] = worker
         thread.start()

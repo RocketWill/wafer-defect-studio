@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow
 
-from .image_asset import ImageAsset
+from .image_asset import ImageAsset, ReopenedWaferImage, SourceHealth, _source_health
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
 
@@ -32,9 +32,18 @@ class MainWindow(QMainWindow):
         self._image_view._set_loaded_image(loaded, image)
         return loaded
 
-    def load_wafer_image(self, asset: ImageAsset) -> None:
+    def load_wafer_image(self, selection: ImageAsset | ReopenedWaferImage) -> None:
         """Start decoding *asset* without blocking the GUI thread."""
 
+        asset = selection.asset if isinstance(selection, ReopenedWaferImage) else selection
+        self._latest_load_token += 1
+        health = _source_health(asset)
+        if health is SourceHealth.MISSING:
+            self.statusBar().showMessage("Missing Source")
+            return
+        if health is SourceHealth.CHANGED:
+            self.statusBar().showMessage("Changed Source")
+            return
         self.statusBar().showMessage("Loading")
         self._latest_load_token = self._wafer_loader.request(asset.path)
 

@@ -13,7 +13,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from wafer_defect_studio.image_asset import ImageAsset
+from wafer_defect_studio.image_asset import ImageAsset, SourceHealth
 from wafer_defect_studio.main_window import MainWindow
 from wafer_defect_studio.wafer_view import LoadedWaferImage
 
@@ -48,7 +48,9 @@ class ResponsiveLoadingTest(unittest.TestCase):
         window.show()
         app.processEvents()
         try:
-            with patch("wafer_defect_studio.wafer_loader._decode_wafer_image", side_effect=fake_decode):
+            with patch("wafer_defect_studio.wafer_loader._decode_wafer_image", side_effect=fake_decode), patch(
+                "wafer_defect_studio.main_window._source_health", return_value=SourceHealth.AVAILABLE
+            ):
                 self.assertIsNone(window.load_wafer_image(first_asset))
                 self.assertTrue(first_started.wait(1))
                 self.assertEqual(window.statusBar().currentMessage(), "Loading")

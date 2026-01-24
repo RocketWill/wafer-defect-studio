@@ -147,21 +147,24 @@ def load_image_assets(project_path: str | Path) -> tuple[ReopenedWaferImage, ...
     for row in rows:
         asset = ImageAsset(
             image_asset_id=row[0],
-            path=Path(row[1]),
+            path=Path(row[1]).expanduser().resolve(),
             width=row[2],
             height=row[3],
             dtype=row[4],
             format=row[5],
             fingerprint=row[6],
         )
-        if not asset.path.is_file():
-            health = SourceHealth.MISSING
-        elif _sha256(asset.path) == asset.fingerprint:
-            health = SourceHealth.AVAILABLE
-        else:
-            health = SourceHealth.CHANGED
-        reopened.append(ReopenedWaferImage(asset, health))
+        reopened.append(ReopenedWaferImage(asset, _source_health(asset)))
     return tuple(reopened)
+
+
+def _source_health(asset: ImageAsset) -> SourceHealth:
+    path = asset.path.expanduser().resolve()
+    if not path.is_file():
+        return SourceHealth.MISSING
+    if _sha256(path) == asset.fingerprint:
+        return SourceHealth.AVAILABLE
+    return SourceHealth.CHANGED
 
 
 def _sha256(path: Path) -> str:
