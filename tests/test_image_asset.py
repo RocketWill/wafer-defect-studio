@@ -38,7 +38,7 @@ class ImageAssetTest(unittest.TestCase):
             self.assertEqual(asset.format, "TIFF")
             self.assertEqual(asset.fingerprint, fingerprint)
             self.assertEqual(_sha256(grayscale_path), fingerprint)
-            self.assertEqual(project.open_project(project_path).schema_version, 2)
+            self.assertEqual(project.open_project(project_path).schema_version, 3)
 
             connection = sqlite3.connect(database_path)
             try:

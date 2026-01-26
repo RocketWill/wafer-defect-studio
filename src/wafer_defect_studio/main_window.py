@@ -22,6 +22,7 @@ class MainWindow(QMainWindow):
         self._wafer_loader.loaded.connect(self._on_load_ready)
         self._wafer_loader.failed.connect(self._on_load_error)
         self._latest_load_token = 0
+        self._latest_lossy_source = False
         self._load_threads = self._wafer_loader._threads
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
@@ -39,12 +40,18 @@ class MainWindow(QMainWindow):
         self._latest_load_token += 1
         health = _source_health(asset)
         if health is SourceHealth.MISSING:
+            self._latest_lossy_source = False
+            self._latest_load_token = -1
             self.statusBar().showMessage("Missing Source")
             return
         if health is SourceHealth.CHANGED:
+            self._latest_lossy_source = False
+            self._latest_load_token = -1
             self.statusBar().showMessage("Changed Source")
             return
-        self.statusBar().showMessage("Loading")
+        self._latest_lossy_source = asset.lossy_source
+        loading_status = "Loading - Lossy JPEG Source" if self._latest_lossy_source else "Loading"
+        self.statusBar().showMessage(loading_status)
         self._latest_load_token = self._wafer_loader.request(asset.path)
 
     def _on_load_ready(self, token: int, loaded: LoadedWaferImage, image) -> None:
@@ -52,7 +59,8 @@ class MainWindow(QMainWindow):
             return
         self._loaded_wafer_image = loaded
         self._image_view._set_loaded_image(loaded, image)
-        self.statusBar().showMessage("Ready")
+        ready_status = "Ready - Lossy JPEG Source" if self._latest_lossy_source else "Ready"
+        self.statusBar().showMessage(ready_status)
 
     def _on_load_error(self, token: int, message: str) -> None:
         if token != self._latest_load_token:

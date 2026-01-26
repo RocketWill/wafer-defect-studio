@@ -71,7 +71,7 @@ class GrayscaleFormatsTest(unittest.TestCase):
                 _write_color(source_path, image_format)
                 with self.assertRaisesRegex(
                     image_asset.ImageAssetError,
-                    re.escape("Color images are not supported; provide a grayscale TIFF, PNG, or BMP."),
+                    re.escape("Color images are not supported; provide a grayscale TIFF, PNG, BMP, or JPEG."),
                 ):
                     image_asset.register_wafer_image(reject_project, source_path)
 

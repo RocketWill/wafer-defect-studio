@@ -81,7 +81,13 @@ class ResponsiveLoadingTest(unittest.TestCase):
                 self.assertEqual(window.statusBar().currentMessage(), "Ready")
         finally:
             release_first.set()
+            cleanup_deadline = time.monotonic() + 3
+            while window._load_threads and time.monotonic() < cleanup_deadline:
+                app.processEvents()
+                QTest.qWait(10)
             window.close()
+            window.deleteLater()
+            app.processEvents()
             del window
             app.processEvents()
 

@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_SCHEMA_VERSION = 2
-_SUPPORTED_SCHEMA_VERSIONS = (1, _SCHEMA_VERSION)
+_SCHEMA_VERSION = 3
+_SUPPORTED_SCHEMA_VERSIONS = (1, 2, _SCHEMA_VERSION)
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
 _IMAGE_ASSETS_TABLE_SQL = (
@@ -20,7 +20,8 @@ _IMAGE_ASSETS_TABLE_SQL = (
     "height INTEGER NOT NULL, "
     "dtype TEXT NOT NULL, "
     "format TEXT NOT NULL, "
-    "fingerprint TEXT NOT NULL"
+    "fingerprint TEXT NOT NULL, "
+    "lossy_source INTEGER NOT NULL DEFAULT 0 CHECK (lossy_source IN (0, 1))"
     ")"
 )
 

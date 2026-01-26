@@ -40,6 +40,7 @@ class ImageAsset:
     dtype: str
     format: str
     fingerprint: str
+    lossy_source: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,13 +72,13 @@ _COLOR_FORMATS = {
     )
     if hasattr(QImage, name)
 }
-_SUPPORTED_FORMATS = {"TIFF", "PNG", "BMP"}
-_COLOR_ERROR = "Color images are not supported; provide a grayscale TIFF, PNG, or BMP."
-_UNSUPPORTED_ERROR = "Unsupported image format; provide a grayscale TIFF, PNG, or BMP."
+_SUPPORTED_FORMATS = {"TIFF", "PNG", "BMP", "JPEG"}
+_COLOR_ERROR = "Color images are not supported; provide a grayscale TIFF, PNG, BMP, or JPEG."
+_UNSUPPORTED_ERROR = "Unsupported image format; provide a grayscale TIFF, PNG, BMP, or JPEG."
 
 
 def register_wafer_image(project_path: str | Path, source_path: str | Path) -> ImageAsset:
-    """Validate and register one external grayscale TIFF, PNG, or BMP source."""
+    """Validate and register one external grayscale TIFF, PNG, BMP, or JPEG source."""
 
     project_info = open_project(project_path)
     image_path = Path(source_path).expanduser().resolve()
@@ -102,6 +103,9 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
         "BMP": {
             QImage.Format_Indexed8: "uint8",
         },
+        "JPEG": {
+            QImage.Format_Grayscale8: "uint8",
+        },
     }
     dtype = dtype_by_format[image_format].get(image.format())
     if dtype is None:
@@ -118,6 +122,7 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
         dtype=dtype,
         format=image_format,
         fingerprint=fingerprint,
+        lossy_source=image_format == "JPEG",
     )
 
     database_path = project_info.path / "project.sqlite"
@@ -135,13 +140,26 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
             if updated != 1:
                 raise ImageAssetError(f"Invalid project metadata: {database_path}")
             connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        elif schema_version == 2:
+            connection.execute(
+                "ALTER TABLE image_assets ADD COLUMN lossy_source INTEGER NOT NULL "
+                "DEFAULT 0 CHECK (lossy_source IN (0, 1))"
+            )
+            updated = connection.execute(
+                "UPDATE project_metadata SET schema_version = ? "
+                "WHERE project_id = ? AND schema_version = 2",
+                (_SCHEMA_VERSION, project_info.project_id),
+            ).rowcount
+            if updated != 1:
+                raise ImageAssetError(f"Invalid project metadata: {database_path}")
+            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         elif schema_version != _SCHEMA_VERSION:
             raise ImageAssetError(f"Unsupported project schema: {database_path}")
 
         connection.execute(
             "INSERT INTO image_assets "
-            "(image_asset_id, path, width, height, dtype, format, fingerprint) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(image_asset_id, path, width, height, dtype, format, fingerprint, lossy_source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 asset.image_asset_id,
                 str(asset.path),
@@ -150,6 +168,7 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
                 asset.dtype,
                 asset.format,
                 asset.fingerprint,
+                int(asset.lossy_source),
             ),
         )
         connection.commit()
@@ -175,10 +194,16 @@ def load_image_assets(project_path: str | Path) -> tuple[ReopenedWaferImage, ...
     except sqlite3.Error as error:
         raise ImageAssetError(f"Cannot open project database: {database_path}") from error
     try:
-        rows = connection.execute(
-            "SELECT image_asset_id, path, width, height, dtype, format, fingerprint "
-            "FROM image_assets ORDER BY image_asset_id"
-        ).fetchall()
+        if project_info.schema_version == 2:
+            rows = connection.execute(
+                "SELECT image_asset_id, path, width, height, dtype, format, fingerprint "
+                "FROM image_assets ORDER BY image_asset_id"
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT image_asset_id, path, width, height, dtype, format, fingerprint, lossy_source "
+                "FROM image_assets ORDER BY image_asset_id"
+            ).fetchall()
     except sqlite3.Error as error:
         raise ImageAssetError(f"Invalid image asset metadata: {database_path}") from error
     finally:
@@ -194,6 +219,7 @@ def load_image_assets(project_path: str | Path) -> tuple[ReopenedWaferImage, ...
             dtype=row[4],
             format=row[5],
             fingerprint=row[6],
+            lossy_source=bool(row[7]) if project_info.schema_version >= 3 else False,
         )
         reopened.append(ReopenedWaferImage(asset, _source_health(asset)))
     return tuple(reopened)

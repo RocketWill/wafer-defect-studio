@@ -43,14 +43,14 @@ class InvalidSourceUiTest(unittest.TestCase):
                 self.assertEqual(window.statusBar().currentMessage(), "Missing Source")
                 self.assertEqual(request.call_count, 1)
                 missing_token = window._latest_load_token
-                self.assertNotEqual(missing_token, old_token)
+                self.assertEqual(missing_token, -1)
 
                 source_path.write_bytes(b"changed source bytes")
                 window.load_wafer_image(reopened)
                 self.assertEqual(window.statusBar().currentMessage(), "Changed Source")
                 self.assertEqual(request.call_count, 1)
                 changed_token = window._latest_load_token
-                self.assertNotEqual(changed_token, missing_token)
+                self.assertEqual(changed_token, -1)
 
                 stale_loaded = LoadedWaferImage(2, 2, "uint16", array("H", [1, 1, 1, 1]))
                 stale_image = QImage(2, 2, QImage.Format_Grayscale16)
