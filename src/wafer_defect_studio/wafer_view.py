@@ -134,20 +134,29 @@ def _decode_wafer_image(path: Path) -> tuple[LoadedWaferImage, QImage]:
     image = reader.read()
     if image.isNull():
         raise ValueError(f"Unable to decode wafer image: {path}")
-    if image.format() != QImage.Format_Grayscale16:
-        raise ValueError(f"Wafer image must be grayscale16: {path}")
+    if image.format() not in (
+        QImage.Format_Grayscale8,
+        QImage.Format_Grayscale16,
+        QImage.Format_Indexed8,
+    ):
+        raise ValueError(f"Wafer image must be grayscale8 or grayscale16: {path}")
 
-    width = image.width()
-    height = image.height()
-    row_bytes = width * 2
-    stride = image.bytesPerLine()
-    source = image.constBits()
-    pixels = array("H")
+    display_image = image
+    if image.format() == QImage.Format_Indexed8:
+        display_image = image.convertToFormat(QImage.Format_Grayscale8)
+
+    width = display_image.width()
+    height = display_image.height()
+    sixteen_bit = image.format() == QImage.Format_Grayscale16
+    row_bytes = width * (2 if sixteen_bit else 1)
+    stride = display_image.bytesPerLine()
+    source = display_image.constBits()
+    pixels = array("H" if sixteen_bit else "B")
     for row_index in range(height):
-        row = array("H")
+        row = array("H" if sixteen_bit else "B")
         row.frombytes(bytes(source[row_index * stride : row_index * stride + row_bytes]))
-        if sys.byteorder == "big":
+        if sixteen_bit and sys.byteorder == "big":
             row.byteswap()
         pixels.extend(row)
 
-    return LoadedWaferImage(width, height, "uint16", pixels), image
+    return LoadedWaferImage(width, height, "uint16" if sixteen_bit else "uint8", pixels), display_image

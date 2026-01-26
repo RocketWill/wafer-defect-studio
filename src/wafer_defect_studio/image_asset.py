@@ -1,4 +1,4 @@
-"""Register external grayscale TIFF images as project image assets."""
+"""Register external grayscale TIFF, PNG, and BMP image assets."""
 
 from __future__ import annotations
 
@@ -50,8 +50,34 @@ class ReopenedWaferImage:
     source_health: SourceHealth
 
 
+_COLOR_FORMATS = {
+    getattr(QImage, name)
+    for name in (
+        "Format_RGB16",
+        "Format_RGB32",
+        "Format_ARGB32",
+        "Format_ARGB32_Premultiplied",
+        "Format_RGB555",
+        "Format_RGB565",
+        "Format_RGB666",
+        "Format_RGB888",
+        "Format_RGBX8888",
+        "Format_RGBA8888",
+        "Format_RGBA8888_Premultiplied",
+        "Format_BGR30",
+        "Format_A2BGR30_Premultiplied",
+        "Format_RGB30",
+        "Format_A2RGB30_Premultiplied",
+    )
+    if hasattr(QImage, name)
+}
+_SUPPORTED_FORMATS = {"TIFF", "PNG", "BMP"}
+_COLOR_ERROR = "Color images are not supported; provide a grayscale TIFF, PNG, or BMP."
+_UNSUPPORTED_ERROR = "Unsupported image format; provide a grayscale TIFF, PNG, or BMP."
+
+
 def register_wafer_image(project_path: str | Path, source_path: str | Path) -> ImageAsset:
-    """Validate and register one external 16-bit grayscale TIFF source."""
+    """Validate and register one external grayscale TIFF, PNG, or BMP source."""
 
     project_info = open_project(project_path)
     image_path = Path(source_path).expanduser().resolve()
@@ -59,14 +85,29 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
         raise FileNotFoundError(image_path)
 
     reader = QImageReader(str(image_path))
-    image = reader.read()
-    if image.isNull():
-        raise ImageAssetError(f"Cannot read image source: {image_path}")
     image_format = bytes(reader.format()).decode("ascii", errors="ignore").upper()
-    if image_format != "TIFF":
-        raise ImageAssetError(f"Only grayscale TIFF image sources are supported: {image_path}")
-    if image.format() != QImage.Format_Grayscale16:
-        raise ImageAssetError(f"Image source must be grayscale16: {image_path}")
+    image = reader.read()
+    if image.isNull() or image_format not in _SUPPORTED_FORMATS:
+        raise ImageAssetError(_UNSUPPORTED_ERROR)
+
+    dtype_by_format = {
+        "TIFF": {
+            QImage.Format_Grayscale8: "uint8",
+            QImage.Format_Grayscale16: "uint16",
+        },
+        "PNG": {
+            QImage.Format_Grayscale8: "uint8",
+            QImage.Format_Grayscale16: "uint16",
+        },
+        "BMP": {
+            QImage.Format_Indexed8: "uint8",
+        },
+    }
+    dtype = dtype_by_format[image_format].get(image.format())
+    if dtype is None:
+        if image.format() in _COLOR_FORMATS or image.depth() >= 16 or image.hasAlphaChannel():
+            raise ImageAssetError(_COLOR_ERROR)
+        raise ImageAssetError(_UNSUPPORTED_ERROR)
 
     fingerprint = _sha256(image_path)
     asset = ImageAsset(
@@ -74,8 +115,8 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
         path=image_path,
         width=image.width(),
         height=image.height(),
-        dtype="uint16",
-        format="TIFF",
+        dtype=dtype,
+        format=image_format,
         fingerprint=fingerprint,
     )
 
