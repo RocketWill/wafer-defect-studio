@@ -12,9 +12,9 @@ from pathlib import Path
 from PySide6.QtGui import QImage, QImageReader
 
 from .project import (
+    _IMAGE_ASSET_SCHEMA_VERSION,
     ProjectError,
     _IMAGE_ASSETS_TABLE_SQL,
-    _SCHEMA_VERSION,
     open_project,
 )
 
@@ -135,11 +135,11 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
             updated = connection.execute(
                 "UPDATE project_metadata SET schema_version = ? "
                 "WHERE project_id = ? AND schema_version = 1",
-                (_SCHEMA_VERSION, project_info.project_id),
+                (_IMAGE_ASSET_SCHEMA_VERSION, project_info.project_id),
             ).rowcount
             if updated != 1:
                 raise ImageAssetError(f"Invalid project metadata: {database_path}")
-            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            connection.execute(f"PRAGMA user_version = {_IMAGE_ASSET_SCHEMA_VERSION}")
         elif schema_version == 2:
             connection.execute(
                 "ALTER TABLE image_assets ADD COLUMN lossy_source INTEGER NOT NULL "
@@ -148,12 +148,12 @@ def register_wafer_image(project_path: str | Path, source_path: str | Path) -> I
             updated = connection.execute(
                 "UPDATE project_metadata SET schema_version = ? "
                 "WHERE project_id = ? AND schema_version = 2",
-                (_SCHEMA_VERSION, project_info.project_id),
+                (_IMAGE_ASSET_SCHEMA_VERSION, project_info.project_id),
             ).rowcount
             if updated != 1:
                 raise ImageAssetError(f"Invalid project metadata: {database_path}")
-            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-        elif schema_version != _SCHEMA_VERSION:
+            connection.execute(f"PRAGMA user_version = {_IMAGE_ASSET_SCHEMA_VERSION}")
+        elif schema_version < _IMAGE_ASSET_SCHEMA_VERSION:
             raise ImageAssetError(f"Unsupported project schema: {database_path}")
 
         connection.execute(

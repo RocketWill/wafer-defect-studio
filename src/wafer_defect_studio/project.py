@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_SCHEMA_VERSION = 3
-_SUPPORTED_SCHEMA_VERSIONS = (1, 2, _SCHEMA_VERSION)
+_SCHEMA_VERSION = 4
+_IMAGE_ASSET_SCHEMA_VERSION = 3
+_SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, _SCHEMA_VERSION)
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
 _IMAGE_ASSETS_TABLE_SQL = (
@@ -24,6 +25,26 @@ _IMAGE_ASSETS_TABLE_SQL = (
     "lossy_source INTEGER NOT NULL DEFAULT 0 CHECK (lossy_source IN (0, 1))"
     ")"
 )
+_GRID_PROFILES_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS grid_profiles ("
+    "grid_profile_id TEXT NOT NULL, "
+    "version INTEGER NOT NULL CHECK (version >= 1), "
+    "cell_width INTEGER NOT NULL CHECK (cell_width > 0), "
+    "cell_height INTEGER NOT NULL CHECK (cell_height > 0), "
+    "PRIMARY KEY (grid_profile_id, version)"
+    ")"
+)
+_IMAGE_ASSET_COLUMNS_V2 = (
+    "image_asset_id",
+    "path",
+    "width",
+    "height",
+    "dtype",
+    "format",
+    "fingerprint",
+)
+_IMAGE_ASSET_COLUMNS_V3 = _IMAGE_ASSET_COLUMNS_V2 + ("lossy_source",)
+_GRID_PROFILE_COLUMNS = ("grid_profile_id", "version", "cell_width", "cell_height")
 
 
 class ProjectError(ValueError):
@@ -68,6 +89,7 @@ def create_project(path: str | Path) -> ProjectInfo:
             (project_id, _SCHEMA_VERSION),
         )
         connection.execute(_IMAGE_ASSETS_TABLE_SQL)
+        connection.execute(_GRID_PROFILES_TABLE_SQL)
         connection.commit()
     except sqlite3.Error:
         connection.rollback()
@@ -96,9 +118,12 @@ def open_project(path: str | Path) -> ProjectInfo:
         metadata = connection.execute(
             "SELECT project_id, schema_version FROM project_metadata"
         ).fetchall()
-        has_image_assets_table = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'image_assets'"
-        ).fetchone() is not None
+        image_asset_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(image_assets)")
+        )
+        grid_profile_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(grid_profiles)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -110,8 +135,12 @@ def open_project(path: str | Path) -> ProjectInfo:
     project_id, metadata_version = metadata[0]
     if metadata_version != pragma_version or not project_id:
         raise ProjectError(f"Invalid project metadata: {database_path}")
-    if pragma_version == _SCHEMA_VERSION and not has_image_assets_table:
-        raise ProjectError(f"Missing image asset table: {database_path}")
+    if pragma_version == 2 and image_asset_columns != _IMAGE_ASSET_COLUMNS_V2:
+        raise ProjectError(f"Invalid image asset table: {database_path}")
+    if pragma_version >= _IMAGE_ASSET_SCHEMA_VERSION and image_asset_columns != _IMAGE_ASSET_COLUMNS_V3:
+        raise ProjectError(f"Invalid image asset table: {database_path}")
+    if pragma_version == _SCHEMA_VERSION and grid_profile_columns != _GRID_PROFILE_COLUMNS:
+        raise ProjectError(f"Invalid grid profile table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 
