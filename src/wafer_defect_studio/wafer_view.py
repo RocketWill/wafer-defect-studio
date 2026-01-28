@@ -110,6 +110,8 @@ class WaferView(QGraphicsView):
             self._annotation_grid_origin.y(),
         )
         self._scene.addItem(self._grid_overlay_item)
+        self._scene.invalidate()
+        self.viewport().update()
 
     def _fit_image(self) -> None:
         if self._pixmap_item is None:
