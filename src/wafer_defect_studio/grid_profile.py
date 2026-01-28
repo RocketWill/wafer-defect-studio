@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .project import (
+    _GRID_PROFILE_SCHEMA_VERSION,
     ProjectError,
     _GRID_PROFILES_TABLE_SQL,
     _SCHEMA_VERSION,
@@ -60,12 +61,12 @@ def save_grid_profile(
             updated = connection.execute(
                 "UPDATE project_metadata SET schema_version = ? "
                 "WHERE project_id = ? AND schema_version = 3",
-                (_SCHEMA_VERSION, project_info.project_id),
+                (_GRID_PROFILE_SCHEMA_VERSION, project_info.project_id),
             ).rowcount
             if updated != 1:
                 raise GridProfileError(f"Invalid project metadata: {database_path}")
-            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-        elif schema_version != _SCHEMA_VERSION:
+            connection.execute(f"PRAGMA user_version = {_GRID_PROFILE_SCHEMA_VERSION}")
+        elif schema_version not in (_GRID_PROFILE_SCHEMA_VERSION, _SCHEMA_VERSION):
             raise GridProfileError(f"Unsupported project schema: {database_path}")
 
         if previous is None:
@@ -110,7 +111,7 @@ def load_grid_profiles(project_path: str | Path) -> tuple[GridProfile, ...]:
     """Reopen every persisted profile version in deterministic order."""
 
     project_info = open_project(project_path)
-    if project_info.schema_version < _SCHEMA_VERSION:
+    if project_info.schema_version < _GRID_PROFILE_SCHEMA_VERSION:
         return ()
 
     database_path = project_info.path / "project.sqlite"

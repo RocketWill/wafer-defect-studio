@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QDockWidget, QMainWindow
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtWidgets import (
+    QDockWidget,
+    QFormLayout,
+    QMainWindow,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .image_asset import ImageAsset, ReopenedWaferImage, SourceHealth, _source_health
 from .grid_controls import GridProfileControls
@@ -15,8 +23,47 @@ from .grid_profile import (
     load_grid_profiles,
     save_grid_profile,
 )
+from .image_grid_placement import load_image_grid_placement, set_image_grid_origin
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
+
+
+class _GridOriginControls(QWidget):
+    draftChanged = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.origin_x_spin = QSpinBox(self)
+        self.origin_x_spin.setObjectName("gridOriginXSpinBox")
+        self.origin_y_spin = QSpinBox(self)
+        self.origin_y_spin.setObjectName("gridOriginYSpinBox")
+        self.apply_button = QPushButton("Apply Origin", self)
+        self.apply_button.setObjectName("applyGridOriginButton")
+        self.apply_button.setEnabled(False)
+        form = QFormLayout()
+        form.addRow("Origin x (px)", self.origin_x_spin)
+        form.addRow("Origin y (px)", self.origin_y_spin)
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.apply_button)
+        self.origin_x_spin.valueChanged.connect(lambda _value: self.draftChanged.emit())
+        self.origin_y_spin.valueChanged.connect(lambda _value: self.draftChanged.emit())
+
+    def bind(self, origin_x: int, origin_y: int, cell_width: int, cell_height: int) -> None:
+        widgets = (self.origin_x_spin, self.origin_y_spin)
+        previous = [widget.blockSignals(True) for widget in widgets]
+        try:
+            self.origin_x_spin.setRange(0, cell_width - 1)
+            self.origin_y_spin.setRange(0, cell_height - 1)
+            self.origin_x_spin.setValue(origin_x)
+            self.origin_y_spin.setValue(origin_y)
+            self.apply_button.setEnabled(False)
+        finally:
+            for widget, was_blocked in zip(widgets, previous):
+                widget.blockSignals(was_blocked)
+
+    def draft_origin(self) -> tuple[int, int]:
+        return self.origin_x_spin.value(), self.origin_y_spin.value()
 
 
 class MainWindow(QMainWindow):
@@ -34,8 +81,11 @@ class MainWindow(QMainWindow):
         self._latest_load_token = 0
         self._latest_lossy_source = False
         self._load_threads = self._wafer_loader._threads
+        self._pending_image_assets: dict[int, ImageAsset] = {}
+        self._current_image_asset: ImageAsset | None = None
         self._grid_project_path: Path | None = None
         self._grid_profile: GridProfile | None = None
+        self._grid_origin = (0, 0)
         self._grid_controls = GridProfileControls()
         self._grid_controls.draftChanged.connect(self._on_grid_draft_changed)
         self._grid_controls.apply_button.clicked.connect(self._apply_grid_profile)
@@ -48,13 +98,27 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._grid_profile_dock)
         self._grid_profile_dock.setEnabled(False)
         self._grid_profile_dock.hide()
+        self._grid_origin_controls = _GridOriginControls()
+        self._grid_origin_controls.draftChanged.connect(self._on_grid_origin_draft_changed)
+        self._grid_origin_controls.apply_button.clicked.connect(self._apply_grid_origin)
+        self._grid_origin_dock = QDockWidget("Grid Origin", self)
+        self._grid_origin_dock.setObjectName("gridOriginDock")
+        self._grid_origin_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._grid_origin_dock.setWidget(self._grid_origin_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._grid_origin_dock)
+        self._grid_origin_dock.setEnabled(False)
+        self._grid_origin_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
 
+        self._latest_load_token += 1
         loaded, image = _decode_wafer_image(asset.path)
         self._loaded_wafer_image = loaded
         self._image_view._set_loaded_image(loaded, image)
+        self._set_current_image_asset(asset)
         return loaded
 
     def set_grid_profile(self, project_path: str | Path, profile: GridProfile) -> None:
@@ -75,7 +139,7 @@ class MainWindow(QMainWindow):
         self._grid_controls.bind(profile)
         self._grid_profile_dock.setEnabled(True)
         self._grid_profile_dock.show()
-        self._image_view.set_annotation_grid(profile, QPoint(0, 0))
+        self._bind_grid_for_current_image()
 
     def _on_grid_draft_changed(self) -> None:
         profile = self._grid_profile
@@ -97,6 +161,65 @@ class MainWindow(QMainWindow):
         )
         self.set_grid_profile(self._grid_project_path, profile)
 
+    def _set_current_image_asset(self, asset: ImageAsset) -> None:
+        self._current_image_asset = asset
+        self._bind_grid_for_current_image()
+
+    def _bind_grid_for_current_image(self) -> None:
+        profile = self._grid_profile
+        if profile is None:
+            self._grid_origin_dock.setEnabled(False)
+            self._grid_origin_dock.hide()
+            return
+        origin_x = 0
+        origin_y = 0
+        asset = self._current_image_asset
+        if asset is not None and self._grid_project_path is not None:
+            placement = load_image_grid_placement(
+                self._grid_project_path,
+                asset.image_asset_id,
+            )
+            if (
+                placement is not None
+                and placement.grid_profile_id == profile.grid_profile_id
+                and placement.grid_profile_version == profile.version
+            ):
+                origin_x = placement.origin_x
+                origin_y = placement.origin_y
+        self._image_view.set_annotation_grid(profile, QPoint(origin_x, origin_y))
+        if asset is None:
+            self._grid_origin_dock.setEnabled(False)
+            self._grid_origin_dock.hide()
+            return
+        self._grid_origin = (origin_x, origin_y)
+        self._grid_origin_controls.bind(origin_x, origin_y, profile.cell_width, profile.cell_height)
+        self._grid_origin_dock.setEnabled(True)
+        self._grid_origin_dock.show()
+
+    def _on_grid_origin_draft_changed(self) -> None:
+        if self._grid_profile is None or self._current_image_asset is None:
+            return
+        self._grid_origin_controls.apply_button.setEnabled(
+            self._grid_origin_controls.draft_origin() != self._grid_origin
+        )
+
+    def _apply_grid_origin(self) -> None:
+        if (
+            self._grid_project_path is None
+            or self._grid_profile is None
+            or self._current_image_asset is None
+        ):
+            return
+        origin_x, origin_y = self._grid_origin_controls.draft_origin()
+        set_image_grid_origin(
+            self._grid_project_path,
+            self._current_image_asset.image_asset_id,
+            self._grid_profile.grid_profile_id,
+            origin_x,
+            origin_y,
+        )
+        self._bind_grid_for_current_image()
+
     def load_wafer_image(self, selection: ImageAsset | ReopenedWaferImage) -> None:
         """Start decoding *asset* without blocking the GUI thread."""
 
@@ -117,16 +240,21 @@ class MainWindow(QMainWindow):
         loading_status = "Loading - Lossy JPEG Source" if self._latest_lossy_source else "Loading"
         self.statusBar().showMessage(loading_status)
         self._latest_load_token = self._wafer_loader.request(asset.path)
+        self._pending_image_assets[self._latest_load_token] = asset
 
     def _on_load_ready(self, token: int, loaded: LoadedWaferImage, image) -> None:
+        asset = self._pending_image_assets.pop(token, None)
         if token != self._latest_load_token:
             return
         self._loaded_wafer_image = loaded
         self._image_view._set_loaded_image(loaded, image)
+        if asset is not None:
+            self._set_current_image_asset(asset)
         ready_status = "Ready - Lossy JPEG Source" if self._latest_lossy_source else "Ready"
         self.statusBar().showMessage(ready_status)
 
     def _on_load_error(self, token: int, message: str) -> None:
+        self._pending_image_assets.pop(token, None)
         if token != self._latest_load_token:
             return
         self.statusBar().showMessage(f"Error: {message}")

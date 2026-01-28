@@ -43,7 +43,9 @@ class GridControlsTest(unittest.TestCase):
             self.assertEqual((width_spin.minimum(), width_spin.maximum()), (1, 100000))
             self.assertEqual((height_spin.minimum(), height_spin.maximum()), (1, 100000))
             self.assertEqual((slider.minimum(), slider.maximum(), slider.singleStep(), slider.pageStep()), (1, 100000, 1, 16))
-            self.assertEqual([label.text() for label in window.findChildren(QLabel)], ["Cell width (px)", "Cell height (px)"])
+            labels = [label.text() for label in window.findChildren(QLabel)]
+            self.assertIn("Cell width (px)", labels)
+            self.assertIn("Cell height (px)", labels)
 
             window.set_grid_profile(project_path, first)
             self.assertTrue(dock.isEnabled())
