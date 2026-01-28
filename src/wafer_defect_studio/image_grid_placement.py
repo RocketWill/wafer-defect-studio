@@ -9,6 +9,7 @@ from pathlib import Path
 from .project import (
     _GRID_PROFILE_SCHEMA_VERSION,
     _IMAGE_GRID_PLACEMENTS_TABLE_SQL,
+    _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION,
     _SCHEMA_VERSION,
     ProjectError,
     open_project,
@@ -22,6 +23,10 @@ class ImageGridPlacement:
     grid_profile_version: int
     origin_x: int
     origin_y: int
+
+
+class ImageGridPlacementError(ProjectError):
+    """Raised when an image-grid placement cannot be read or persisted."""
 
 
 def set_image_grid_origin(
@@ -40,7 +45,7 @@ def set_image_grid_origin(
 
     project_info = open_project(project_path)
     if project_info.schema_version < _GRID_PROFILE_SCHEMA_VERSION:
-        raise ProjectError("Image grid placement requires project schema 4 or newer")
+        raise ImageGridPlacementError("Image grid placement requires project schema 4 or newer")
 
     database_path = project_info.path / "project.sqlite"
     connection = sqlite3.connect(database_path)
@@ -53,13 +58,13 @@ def set_image_grid_origin(
             updated = connection.execute(
                 "UPDATE project_metadata SET schema_version = ? "
                 "WHERE project_id = ? AND schema_version = 4",
-                (_SCHEMA_VERSION, project_info.project_id),
+                (_IMAGE_GRID_PLACEMENT_SCHEMA_VERSION, project_info.project_id),
             ).rowcount
             if updated != 1:
-                raise ProjectError(f"Invalid project metadata: {database_path}")
-            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-        elif schema_version != _SCHEMA_VERSION:
-            raise ProjectError(f"Unsupported project schema: {database_path}")
+                raise ImageGridPlacementError(f"Invalid project metadata: {database_path}")
+            connection.execute(f"PRAGMA user_version = {_IMAGE_GRID_PLACEMENT_SCHEMA_VERSION}")
+        elif schema_version < _GRID_PROFILE_SCHEMA_VERSION or schema_version > _SCHEMA_VERSION:
+            raise ImageGridPlacementError(f"Unsupported project schema: {database_path}")
 
         profile = connection.execute(
             "SELECT grid_profile_id, version, cell_width, cell_height "
@@ -68,7 +73,7 @@ def set_image_grid_origin(
             (grid_profile_id,),
         ).fetchone()
         if profile is None:
-            raise ProjectError(f"Unknown grid profile: {grid_profile_id}")
+            raise ImageGridPlacementError(f"Unknown grid profile: {grid_profile_id}")
         if origin_x < 0 or origin_y < 0 or origin_x >= profile[2] or origin_y >= profile[3]:
             raise ValueError("origin must be canonical for the grid profile")
 
@@ -77,7 +82,7 @@ def set_image_grid_origin(
             (image_asset_id,),
         ).fetchone()
         if image_exists is None:
-            raise ProjectError(f"Unknown image asset: {image_asset_id}")
+            raise ImageGridPlacementError(f"Unknown image asset: {image_asset_id}")
 
         connection.execute(
             "INSERT INTO image_grid_placements "
@@ -90,6 +95,11 @@ def set_image_grid_origin(
             (image_asset_id, grid_profile_id, profile[1], origin_x, origin_y),
         )
         connection.commit()
+    except sqlite3.Error as error:
+        connection.rollback()
+        raise ImageGridPlacementError(
+            f"Invalid image grid placement metadata: {database_path}"
+        ) from error
     except Exception:
         connection.rollback()
         raise
@@ -106,22 +116,32 @@ def load_image_grid_placement(
 
     _text_identifier("image_asset_id", image_asset_id)
     project_info = open_project(project_path)
-    if project_info.schema_version < _SCHEMA_VERSION:
-        return None
+    if project_info.schema_version < _GRID_PROFILE_SCHEMA_VERSION:
+        raise ImageGridPlacementError("Image grid placement requires project schema 4 or newer")
 
     database_path = project_info.path / "project.sqlite"
     try:
         connection = sqlite3.connect(database_path.resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error as error:
-        raise ProjectError(f"Cannot open project database: {database_path}") from error
+        raise ImageGridPlacementError(f"Cannot open project database: {database_path}") from error
     try:
+        image_exists = connection.execute(
+            "SELECT 1 FROM image_assets WHERE image_asset_id = ?",
+            (image_asset_id,),
+        ).fetchone()
+        if image_exists is None:
+            raise ImageGridPlacementError(f"Unknown image asset: {image_asset_id}")
+        if project_info.schema_version == _GRID_PROFILE_SCHEMA_VERSION:
+            return None
         row = connection.execute(
             "SELECT image_asset_id, grid_profile_id, grid_profile_version, origin_x, origin_y "
             "FROM image_grid_placements WHERE image_asset_id = ?",
             (image_asset_id,),
         ).fetchone()
     except sqlite3.Error as error:
-        raise ProjectError(f"Invalid image grid placement metadata: {database_path}") from error
+        raise ImageGridPlacementError(
+            f"Invalid image grid placement metadata: {database_path}"
+        ) from error
     finally:
         connection.close()
 

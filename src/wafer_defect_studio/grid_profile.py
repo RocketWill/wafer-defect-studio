@@ -66,7 +66,7 @@ def save_grid_profile(
             if updated != 1:
                 raise GridProfileError(f"Invalid project metadata: {database_path}")
             connection.execute(f"PRAGMA user_version = {_GRID_PROFILE_SCHEMA_VERSION}")
-        elif schema_version not in (_GRID_PROFILE_SCHEMA_VERSION, _SCHEMA_VERSION):
+        elif schema_version < _GRID_PROFILE_SCHEMA_VERSION or schema_version > _SCHEMA_VERSION:
             raise GridProfileError(f"Unsupported project schema: {database_path}")
 
         if previous is None:

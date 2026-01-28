@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
-_SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4, _SCHEMA_VERSION)
+_IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
+_SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, _SCHEMA_VERSION)
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
 _IMAGE_ASSETS_TABLE_SQL = (
@@ -37,13 +38,23 @@ _GRID_PROFILES_TABLE_SQL = (
 )
 _IMAGE_GRID_PLACEMENTS_TABLE_SQL = (
     "CREATE TABLE IF NOT EXISTS image_grid_placements ("
-    "image_asset_id TEXT PRIMARY KEY REFERENCES image_assets(image_asset_id), "
+    "image_asset_id TEXT NOT NULL PRIMARY KEY, "
     "grid_profile_id TEXT NOT NULL, "
     "grid_profile_version INTEGER NOT NULL CHECK (grid_profile_version >= 1), "
     "origin_x INTEGER NOT NULL CHECK (origin_x >= 0), "
     "origin_y INTEGER NOT NULL CHECK (origin_y >= 0), "
+    "FOREIGN KEY (image_asset_id) REFERENCES image_assets(image_asset_id), "
     "FOREIGN KEY (grid_profile_id, grid_profile_version) "
     "REFERENCES grid_profiles(grid_profile_id, version)"
+    ")"
+)
+_EFFECTIVE_WAFER_AREAS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS effective_wafer_areas ("
+    "image_asset_id TEXT NOT NULL PRIMARY KEY, "
+    "shape TEXT NOT NULL CHECK (shape IN ('ellipse', 'polygon')), "
+    "geometry_json TEXT NOT NULL, "
+    "confirmed INTEGER NOT NULL DEFAULT 0 CHECK (confirmed IN (0, 1)), "
+    "FOREIGN KEY (image_asset_id) REFERENCES image_assets(image_asset_id)"
     ")"
 )
 _IMAGE_ASSET_COLUMNS_V2 = (
@@ -63,6 +74,12 @@ _IMAGE_GRID_PLACEMENT_COLUMNS = (
     "grid_profile_version",
     "origin_x",
     "origin_y",
+)
+_EFFECTIVE_WAFER_AREA_COLUMNS = (
+    "image_asset_id",
+    "shape",
+    "geometry_json",
+    "confirmed",
 )
 
 
@@ -110,6 +127,7 @@ def create_project(path: str | Path) -> ProjectInfo:
         connection.execute(_IMAGE_ASSETS_TABLE_SQL)
         connection.execute(_GRID_PROFILES_TABLE_SQL)
         connection.execute(_IMAGE_GRID_PLACEMENTS_TABLE_SQL)
+        connection.execute(_EFFECTIVE_WAFER_AREAS_TABLE_SQL)
         connection.commit()
     except sqlite3.Error:
         connection.rollback()
@@ -147,6 +165,10 @@ def open_project(path: str | Path) -> ProjectInfo:
         image_grid_placement_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(image_grid_placements)")
         )
+        effective_wafer_area_columns = tuple(
+            row[1]
+            for row in connection.execute("PRAGMA table_info(effective_wafer_areas)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -164,8 +186,10 @@ def open_project(path: str | Path) -> ProjectInfo:
         raise ProjectError(f"Invalid image asset table: {database_path}")
     if pragma_version >= _GRID_PROFILE_SCHEMA_VERSION and grid_profile_columns != _GRID_PROFILE_COLUMNS:
         raise ProjectError(f"Invalid grid profile table: {database_path}")
-    if pragma_version == _SCHEMA_VERSION and image_grid_placement_columns != _IMAGE_GRID_PLACEMENT_COLUMNS:
+    if pragma_version >= 5 and image_grid_placement_columns != _IMAGE_GRID_PLACEMENT_COLUMNS:
         raise ProjectError(f"Invalid image grid placement table: {database_path}")
+    if pragma_version == _SCHEMA_VERSION and effective_wafer_area_columns != _EFFECTIVE_WAFER_AREA_COLUMNS:
+        raise ProjectError(f"Invalid effective wafer area table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 

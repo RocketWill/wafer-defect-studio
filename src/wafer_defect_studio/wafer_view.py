@@ -9,9 +9,15 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QImage, QImageReader, QPixmap, QTransform
-from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
+from PySide6.QtGui import QColor, QImage, QImageReader, QPixmap, QTransform, QPen
+from PySide6.QtWidgets import (
+    QGraphicsEllipseItem,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
+    QGraphicsView,
+)
 
+from .effective_area import EffectiveWaferArea
 from .grid_overlay import _GridOverlayItem
 from .grid_profile import GridProfile
 
@@ -40,6 +46,8 @@ class WaferView(QGraphicsView):
         self._annotation_grid_profile: GridProfile | None = None
         self._annotation_grid_origin = QPoint(0, 0)
         self._grid_overlay_item: _GridOverlayItem | None = None
+        self._effective_wafer_area: EffectiveWaferArea | None = None
+        self._effective_area_item: QGraphicsEllipseItem | None = None
         self._space_pressed = False
         self._drag_mode_before_space = QGraphicsView.DragMode.NoDrag
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -69,6 +77,16 @@ class WaferView(QGraphicsView):
         self._annotation_grid_origin = QPoint(origin)
         self._rebuild_grid_overlay()
 
+    def set_effective_wafer_area(self, area: EffectiveWaferArea | None) -> None:
+        """Set or clear the source-aligned ellipse drawn over the image."""
+
+        if area is not None and not isinstance(area, EffectiveWaferArea):
+            raise ValueError("area must be an EffectiveWaferArea or None")
+        if area is not None and area.shape != "ellipse":
+            raise ValueError("only ellipse effective wafer areas are supported")
+        self._effective_wafer_area = area
+        self._rebuild_effective_area_overlay()
+
     def _set_loaded_image(self, loaded: LoadedWaferImage, image: QImage) -> None:
         self._loaded_wafer_image = loaded
         pixmap = QPixmap.fromImage(image)
@@ -83,6 +101,7 @@ class WaferView(QGraphicsView):
         )
 
         self._grid_overlay_item = None
+        self._effective_area_item = None
         self._scene.clear()
         item = self._scene.addPixmap(fitted)
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
@@ -92,6 +111,7 @@ class WaferView(QGraphicsView):
         self._pixmap_item = item
         self._scene.setSceneRect(QRectF(0, 0, loaded.width, loaded.height))
         self._rebuild_grid_overlay()
+        self._rebuild_effective_area_overlay()
         self._fit_image()
 
     def _rebuild_grid_overlay(self) -> None:
@@ -110,6 +130,35 @@ class WaferView(QGraphicsView):
             self._annotation_grid_origin.y(),
         )
         self._scene.addItem(self._grid_overlay_item)
+        self._scene.invalidate()
+        self.viewport().update()
+
+    def _rebuild_effective_area_overlay(self) -> None:
+        if self._effective_area_item is not None:
+            self._scene.removeItem(self._effective_area_item)
+            self._effective_area_item = None
+        area = self._effective_wafer_area
+        if area is None or area.shape != "ellipse":
+            return
+        geometry = area.geometry
+        item = QGraphicsEllipseItem(
+            QRectF(
+                geometry.center_x - geometry.radius_x,
+                geometry.center_y - geometry.radius_y,
+                2 * geometry.radius_x,
+                2 * geometry.radius_y,
+            )
+        )
+        pen = QPen(QColor("#ffff00"))
+        pen.setCosmetic(True)
+        pen.setWidth(2)
+        item.setPen(pen)
+        item.setBrush(Qt.BrushStyle.NoBrush)
+        item.setZValue(2)
+        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        item.setAcceptHoverEvents(False)
+        self._scene.addItem(item)
+        self._effective_area_item = item
         self._scene.invalidate()
         self.viewport().update()
 
