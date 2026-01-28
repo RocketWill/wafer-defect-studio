@@ -12,6 +12,9 @@ from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QImage, QImageReader, QPixmap, QTransform
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
 
+from .grid_overlay import _GridOverlayItem
+from .grid_profile import GridProfile
+
 
 @dataclass(frozen=True)
 class LoadedWaferImage:
@@ -34,6 +37,9 @@ class WaferView(QGraphicsView):
         self.setScene(self._scene)
         self._loaded_wafer_image: LoadedWaferImage | None = None
         self._pixmap_item: QGraphicsPixmapItem | None = None
+        self._annotation_grid_profile: GridProfile | None = None
+        self._annotation_grid_origin = QPoint(0, 0)
+        self._grid_overlay_item: _GridOverlayItem | None = None
         self._space_pressed = False
         self._drag_mode_before_space = QGraphicsView.DragMode.NoDrag
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -52,6 +58,17 @@ class WaferView(QGraphicsView):
             return None
         return x, y, int(loaded.pixels[y * loaded.width + x])
 
+    def set_annotation_grid(self, profile: GridProfile, origin: QPoint = QPoint(0, 0)) -> None:
+        """Set the source-aligned annotation grid shown over the wafer image."""
+
+        if not isinstance(profile, GridProfile):
+            raise ValueError("profile must be a GridProfile")
+        if not (0 <= origin.x() < profile.cell_width and 0 <= origin.y() < profile.cell_height):
+            raise ValueError("origin must be canonical for the grid profile")
+        self._annotation_grid_profile = profile
+        self._annotation_grid_origin = QPoint(origin)
+        self._rebuild_grid_overlay()
+
     def _set_loaded_image(self, loaded: LoadedWaferImage, image: QImage) -> None:
         self._loaded_wafer_image = loaded
         pixmap = QPixmap.fromImage(image)
@@ -65,6 +82,7 @@ class WaferView(QGraphicsView):
             Qt.TransformationMode.SmoothTransformation,
         )
 
+        self._grid_overlay_item = None
         self._scene.clear()
         item = self._scene.addPixmap(fitted)
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
@@ -73,7 +91,25 @@ class WaferView(QGraphicsView):
         )
         self._pixmap_item = item
         self._scene.setSceneRect(QRectF(0, 0, loaded.width, loaded.height))
+        self._rebuild_grid_overlay()
         self._fit_image()
+
+    def _rebuild_grid_overlay(self) -> None:
+        if self._grid_overlay_item is not None:
+            self._scene.removeItem(self._grid_overlay_item)
+            self._grid_overlay_item = None
+        loaded = self._loaded_wafer_image
+        profile = self._annotation_grid_profile
+        if loaded is None or profile is None:
+            return
+        self._grid_overlay_item = _GridOverlayItem(
+            loaded.width,
+            loaded.height,
+            profile,
+            self._annotation_grid_origin.x(),
+            self._annotation_grid_origin.y(),
+        )
+        self._scene.addItem(self._grid_overlay_item)
 
     def _fit_image(self) -> None:
         if self._pixmap_item is None:
