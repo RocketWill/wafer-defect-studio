@@ -300,6 +300,59 @@ def participating_annotation_grids(
     return tuple(grid for grid in grids if contains(grid, effective_area.geometry))
 
 
+def confirmed_participating_grids(
+    grids: Iterable[AnnotationGrid], effective_area: EffectiveWaferArea
+) -> tuple[AnnotationGrid, ...]:
+    """Return participating cells only after explicit area confirmation."""
+
+    if not isinstance(effective_area, EffectiveWaferArea):
+        raise ValueError("effective_area must be an EffectiveWaferArea")
+    if not effective_area.confirmed:
+        raise EffectiveWaferAreaError("Effective wafer area is unconfirmed")
+    return participating_annotation_grids(grids, effective_area)
+
+
+def confirm_effective_wafer_area(
+    project_path: str | Path, image_asset_id: str
+) -> EffectiveWaferArea:
+    """Mark an existing image area confirmed, idempotently, in one transaction."""
+
+    _identifier(image_asset_id)
+    project_info = open_project(project_path)
+    if project_info.schema_version != _SCHEMA_VERSION:
+        raise EffectiveWaferAreaError("Effective wafer area confirmation requires project schema 6")
+
+    database_path = project_info.path / "project.sqlite"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT 1 FROM effective_wafer_areas WHERE image_asset_id = ?",
+            (image_asset_id,),
+        ).fetchone()
+        if row is None:
+            raise EffectiveWaferAreaError(f"No effective wafer area for image: {image_asset_id}")
+        connection.execute(
+            "UPDATE effective_wafer_areas SET confirmed = 1 WHERE image_asset_id = ?",
+            (image_asset_id,),
+        )
+        connection.commit()
+    except sqlite3.Error as error:
+        connection.rollback()
+        raise EffectiveWaferAreaError(
+            f"Invalid effective wafer area metadata: {database_path}"
+        ) from error
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    area = load_effective_wafer_area(project_info.path, image_asset_id)
+    if area is None:
+        raise EffectiveWaferAreaError(f"No effective wafer area for image: {image_asset_id}")
+    return area
+
+
 def _ellipse_contains(grid: AnnotationGrid, geometry: EllipseGeometry) -> bool:
     grid_center_x2 = 2 * grid.x + grid.width
     grid_center_y2 = 2 * grid.y + grid.height

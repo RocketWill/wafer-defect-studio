@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from .image_asset import ImageAsset, ReopenedWaferImage, SourceHealth, _source_health
 from .effective_area import (
     EffectiveWaferArea,
+    confirm_effective_wafer_area,
     load_effective_wafer_area,
     participating_annotation_grids,
 )
@@ -49,6 +50,11 @@ class _GridOriginControls(QWidget):
         self.apply_button.setEnabled(False)
         self.participating_count_label = QLabel("Participating: 0", self)
         self.participating_count_label.setObjectName("participatingGridCountLabel")
+        self.confirmation_label = QLabel("Unconfirmed", self)
+        self.confirmation_label.setObjectName("effectiveAreaConfirmationLabel")
+        self.confirm_button = QPushButton("Confirm Area", self)
+        self.confirm_button.setObjectName("confirmEffectiveWaferAreaButton")
+        self.confirm_button.setEnabled(False)
         form = QFormLayout()
         form.addRow("Origin x (px)", self.origin_x_spin)
         form.addRow("Origin y (px)", self.origin_y_spin)
@@ -56,6 +62,8 @@ class _GridOriginControls(QWidget):
         layout.addLayout(form)
         layout.addWidget(self.apply_button)
         layout.addWidget(self.participating_count_label)
+        layout.addWidget(self.confirmation_label)
+        layout.addWidget(self.confirm_button)
         self.origin_x_spin.valueChanged.connect(lambda _value: self.draftChanged.emit())
         self.origin_y_spin.valueChanged.connect(lambda _value: self.draftChanged.emit())
 
@@ -77,6 +85,10 @@ class _GridOriginControls(QWidget):
 
     def set_participating_count(self, count: int) -> None:
         self.participating_count_label.setText(f"Participating: {count}")
+
+    def set_confirmation_state(self, has_area: bool, confirmed: bool) -> None:
+        self.confirmation_label.setText("Confirmed" if confirmed else "Unconfirmed")
+        self.confirm_button.setEnabled(has_area and not confirmed)
 
 
 class MainWindow(QMainWindow):
@@ -115,6 +127,7 @@ class MainWindow(QMainWindow):
         self._grid_origin_controls = _GridOriginControls()
         self._grid_origin_controls.draftChanged.connect(self._on_grid_origin_draft_changed)
         self._grid_origin_controls.apply_button.clicked.connect(self._apply_grid_origin)
+        self._grid_origin_controls.confirm_button.clicked.connect(self._confirm_effective_wafer_area)
         self._grid_origin_dock = QDockWidget("Grid Origin", self)
         self._grid_origin_dock.setObjectName("gridOriginDock")
         self._grid_origin_dock.setAllowedAreas(
@@ -169,6 +182,7 @@ class MainWindow(QMainWindow):
         self._effective_wafer_area = area
         self._image_view.set_effective_wafer_area(area)
         self._refresh_participating_grid_count()
+        self._refresh_effective_area_confirmation()
 
     def _on_grid_draft_changed(self) -> None:
         profile = self._grid_profile
@@ -242,6 +256,7 @@ class MainWindow(QMainWindow):
         self._effective_wafer_area = area
         self._image_view.set_effective_wafer_area(area)
         self._refresh_participating_grid_count()
+        self._refresh_effective_area_confirmation()
 
     def _refresh_participating_grid_count(self) -> None:
         loaded = self._loaded_wafer_image
@@ -260,6 +275,27 @@ class MainWindow(QMainWindow):
         )
         count = len(participating_annotation_grids(grids, area))
         self._grid_origin_controls.set_participating_count(count)
+
+    def _refresh_effective_area_confirmation(self) -> None:
+        area = self._effective_wafer_area
+        self._grid_origin_controls.set_confirmation_state(
+            area is not None,
+            area.confirmed if area is not None else False,
+        )
+
+    def _confirm_effective_wafer_area(self) -> None:
+        if (
+            self._grid_project_path is None
+            or self._current_image_asset is None
+            or self._effective_wafer_area is None
+            or self._effective_wafer_area.confirmed
+        ):
+            return
+        area = confirm_effective_wafer_area(
+            self._grid_project_path,
+            self._current_image_asset.image_asset_id,
+        )
+        self.set_effective_wafer_area(area)
 
     def _on_grid_origin_draft_changed(self) -> None:
         if self._grid_profile is None or self._current_image_asset is None:
