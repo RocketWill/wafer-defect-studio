@@ -8,6 +8,7 @@ from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import (
     QDockWidget,
     QFormLayout,
+    QLabel,
     QMainWindow,
     QPushButton,
     QSpinBox,
@@ -16,7 +17,13 @@ from PySide6.QtWidgets import (
 )
 
 from .image_asset import ImageAsset, ReopenedWaferImage, SourceHealth, _source_health
+from .effective_area import (
+    EffectiveWaferArea,
+    load_effective_wafer_area,
+    participating_annotation_grids,
+)
 from .grid_controls import GridProfileControls
+from .grid_geometry import annotation_grids
 from .grid_profile import (
     GridProfile,
     GridProfileConflictError,
@@ -40,12 +47,15 @@ class _GridOriginControls(QWidget):
         self.apply_button = QPushButton("Apply Origin", self)
         self.apply_button.setObjectName("applyGridOriginButton")
         self.apply_button.setEnabled(False)
+        self.participating_count_label = QLabel("Participating: 0", self)
+        self.participating_count_label.setObjectName("participatingGridCountLabel")
         form = QFormLayout()
         form.addRow("Origin x (px)", self.origin_x_spin)
         form.addRow("Origin y (px)", self.origin_y_spin)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self.apply_button)
+        layout.addWidget(self.participating_count_label)
         self.origin_x_spin.valueChanged.connect(lambda _value: self.draftChanged.emit())
         self.origin_y_spin.valueChanged.connect(lambda _value: self.draftChanged.emit())
 
@@ -64,6 +74,9 @@ class _GridOriginControls(QWidget):
 
     def draft_origin(self) -> tuple[int, int]:
         return self.origin_x_spin.value(), self.origin_y_spin.value()
+
+    def set_participating_count(self, count: int) -> None:
+        self.participating_count_label.setText(f"Participating: {count}")
 
 
 class MainWindow(QMainWindow):
@@ -86,6 +99,7 @@ class MainWindow(QMainWindow):
         self._grid_project_path: Path | None = None
         self._grid_profile: GridProfile | None = None
         self._grid_origin = (0, 0)
+        self._effective_wafer_area: EffectiveWaferArea | None = None
         self._grid_controls = GridProfileControls()
         self._grid_controls.draftChanged.connect(self._on_grid_draft_changed)
         self._grid_controls.apply_button.clicked.connect(self._apply_grid_profile)
@@ -141,6 +155,21 @@ class MainWindow(QMainWindow):
         self._grid_profile_dock.show()
         self._bind_grid_for_current_image()
 
+    def set_effective_wafer_area(self, area: EffectiveWaferArea | None) -> None:
+        """Show the area for the current image and refresh derived participation."""
+
+        if area is not None and not isinstance(area, EffectiveWaferArea):
+            raise ValueError("area must be an EffectiveWaferArea or None")
+        if (
+            area is not None
+            and self._current_image_asset is not None
+            and area.image_asset_id != self._current_image_asset.image_asset_id
+        ):
+            area = None
+        self._effective_wafer_area = area
+        self._image_view.set_effective_wafer_area(area)
+        self._refresh_participating_grid_count()
+
     def _on_grid_draft_changed(self) -> None:
         profile = self._grid_profile
         if profile is None:
@@ -170,6 +199,7 @@ class MainWindow(QMainWindow):
         if profile is None:
             self._grid_origin_dock.setEnabled(False)
             self._grid_origin_dock.hide()
+            self._bind_effective_area_for_current_image()
             return
         origin_x = 0
         origin_y = 0
@@ -190,11 +220,46 @@ class MainWindow(QMainWindow):
         if asset is None:
             self._grid_origin_dock.setEnabled(False)
             self._grid_origin_dock.hide()
+            self._bind_effective_area_for_current_image()
             return
         self._grid_origin = (origin_x, origin_y)
         self._grid_origin_controls.bind(origin_x, origin_y, profile.cell_width, profile.cell_height)
         self._grid_origin_dock.setEnabled(True)
         self._grid_origin_dock.show()
+        self._bind_effective_area_for_current_image()
+
+    def _bind_effective_area_for_current_image(self) -> None:
+        asset = self._current_image_asset
+        area = None
+        if asset is not None and self._grid_project_path is not None:
+            area = load_effective_wafer_area(self._grid_project_path, asset.image_asset_id)
+        elif asset is not None:
+            view_area = self._image_view._effective_wafer_area
+            if view_area is not None and view_area.image_asset_id == asset.image_asset_id:
+                area = view_area
+        if area is not None and asset is not None and area.image_asset_id != asset.image_asset_id:
+            area = None
+        self._effective_wafer_area = area
+        self._image_view.set_effective_wafer_area(area)
+        self._refresh_participating_grid_count()
+
+    def _refresh_participating_grid_count(self) -> None:
+        loaded = self._loaded_wafer_image
+        profile = self._grid_profile
+        area = self._effective_wafer_area
+        if loaded is None or profile is None or area is None:
+            self._grid_origin_controls.set_participating_count(0)
+            return
+        grids = annotation_grids(
+            loaded.width,
+            loaded.height,
+            profile.cell_width,
+            profile.cell_height,
+            self._grid_origin[0],
+            self._grid_origin[1],
+        )
+        count = len(participating_annotation_grids(grids, area))
+        self._grid_origin_controls.set_participating_count(count)
 
     def _on_grid_origin_draft_changed(self) -> None:
         if self._grid_profile is None or self._current_image_asset is None:

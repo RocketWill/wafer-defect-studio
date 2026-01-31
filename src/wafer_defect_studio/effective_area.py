@@ -6,7 +6,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Sequence
 
 from .project import (
     _EFFECTIVE_WAFER_AREAS_TABLE_SQL,
@@ -15,6 +15,7 @@ from .project import (
     ProjectError,
     open_project,
 )
+from .grid_geometry import AnnotationGrid
 
 
 @dataclass(frozen=True)
@@ -281,6 +282,54 @@ def load_effective_wafer_area(
     if confirmed not in (0, 1):
         raise EffectiveWaferAreaError(f"Invalid effective wafer area confirmation: {database_path}")
     return EffectiveWaferArea(str(persisted_id), str(shape), geometry, bool(confirmed))
+
+
+def participating_annotation_grids(
+    grids: Iterable[AnnotationGrid], effective_area: EffectiveWaferArea
+) -> tuple[AnnotationGrid, ...]:
+    """Return grid cells whose full-cell centers lie strictly inside an area."""
+
+    if not isinstance(effective_area, EffectiveWaferArea):
+        raise ValueError("effective_area must be an EffectiveWaferArea")
+    if effective_area.shape == "ellipse" and isinstance(effective_area.geometry, EllipseGeometry):
+        contains = _ellipse_contains
+    elif effective_area.shape == "polygon" and isinstance(effective_area.geometry, PolygonGeometry):
+        contains = _polygon_contains
+    else:
+        raise ValueError("effective area shape and geometry do not match")
+    return tuple(grid for grid in grids if contains(grid, effective_area.geometry))
+
+
+def _ellipse_contains(grid: AnnotationGrid, geometry: EllipseGeometry) -> bool:
+    grid_center_x2 = 2 * grid.x + grid.width
+    grid_center_y2 = 2 * grid.y + grid.height
+    delta_x = grid_center_x2 - 2 * geometry.center_x
+    delta_y = grid_center_y2 - 2 * geometry.center_y
+    radius_x = geometry.radius_x
+    radius_y = geometry.radius_y
+    left = delta_x * delta_x * radius_y * radius_y + delta_y * delta_y * radius_x * radius_x
+    right = (2 * radius_x * radius_y) ** 2
+    return left < right
+
+
+def _polygon_contains(grid: AnnotationGrid, geometry: PolygonGeometry) -> bool:
+    point = SourcePoint(2 * grid.x + grid.width, 2 * grid.y + grid.height)
+    vertices = tuple(SourcePoint(2 * vertex.x, 2 * vertex.y) for vertex in geometry.vertices)
+    for start, end in zip(vertices, vertices[1:] + vertices[:1]):
+        if _on_segment(start, end, point):
+            return False
+
+    inside = False
+    for start, end in zip(vertices, vertices[1:] + vertices[:1]):
+        if (start.y <= point.y < end.y) or (end.y <= point.y < start.y):
+            delta_y = end.y - start.y
+            numerator = (start.x - point.x) * delta_y + (point.y - start.y) * (
+                end.x - start.x
+            )
+            crosses_right = numerator > 0 if delta_y > 0 else numerator < 0
+            if crosses_right:
+                inside = not inside
+    return inside
 
 
 def _geometry_json(geometry: EllipseGeometry) -> str:
