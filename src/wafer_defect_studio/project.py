@@ -9,10 +9,11 @@ from pathlib import Path
 
 
 _SCHEMA_VERSION = 6
+_DEFECT_CLASS_SCHEMA_VERSION = 7
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
-_SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, _SCHEMA_VERSION)
+_SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, _SCHEMA_VERSION, _DEFECT_CLASS_SCHEMA_VERSION)
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
 _IMAGE_ASSETS_TABLE_SQL = (
@@ -57,6 +58,17 @@ _EFFECTIVE_WAFER_AREAS_TABLE_SQL = (
     "FOREIGN KEY (image_asset_id) REFERENCES image_assets(image_asset_id)"
     ")"
 )
+_DEFECT_CLASSES_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS defect_classes ("
+    "code TEXT NOT NULL PRIMARY KEY, "
+    "name TEXT NOT NULL, "
+    "color TEXT NOT NULL, "
+    "icon TEXT NOT NULL DEFAULT '', "
+    "description TEXT NOT NULL DEFAULT '', "
+    "display_order INTEGER NOT NULL CHECK (display_order >= 0), "
+    "enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))"
+    ")"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -80,6 +92,15 @@ _EFFECTIVE_WAFER_AREA_COLUMNS = (
     "shape",
     "geometry_json",
     "confirmed",
+)
+_DEFECT_CLASS_COLUMNS = (
+    "code",
+    "name",
+    "color",
+    "icon",
+    "description",
+    "display_order",
+    "enabled",
 )
 
 
@@ -169,6 +190,9 @@ def open_project(path: str | Path) -> ProjectInfo:
             row[1]
             for row in connection.execute("PRAGMA table_info(effective_wafer_areas)")
         )
+        defect_class_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(defect_classes)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -188,8 +212,10 @@ def open_project(path: str | Path) -> ProjectInfo:
         raise ProjectError(f"Invalid grid profile table: {database_path}")
     if pragma_version >= 5 and image_grid_placement_columns != _IMAGE_GRID_PLACEMENT_COLUMNS:
         raise ProjectError(f"Invalid image grid placement table: {database_path}")
-    if pragma_version == _SCHEMA_VERSION and effective_wafer_area_columns != _EFFECTIVE_WAFER_AREA_COLUMNS:
+    if pragma_version >= _SCHEMA_VERSION and effective_wafer_area_columns != _EFFECTIVE_WAFER_AREA_COLUMNS:
         raise ProjectError(f"Invalid effective wafer area table: {database_path}")
+    if pragma_version == _DEFECT_CLASS_SCHEMA_VERSION and defect_class_columns != _DEFECT_CLASS_COLUMNS:
+        raise ProjectError(f"Invalid defect class table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 
