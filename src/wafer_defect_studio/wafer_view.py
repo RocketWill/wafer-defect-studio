@@ -9,15 +9,17 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QImage, QImageReader, QPixmap, QTransform, QPen
+from PySide6.QtGui import QColor, QImage, QImageReader, QPixmap, QPolygonF, QTransform, QPen
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
+    QGraphicsItem,
+    QGraphicsPolygonItem,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
 )
 
-from .effective_area import EffectiveWaferArea
+from .effective_area import EffectiveWaferArea, PolygonGeometry
 from .grid_overlay import _GridOverlayItem
 from .grid_profile import GridProfile
 
@@ -47,7 +49,7 @@ class WaferView(QGraphicsView):
         self._annotation_grid_origin = QPoint(0, 0)
         self._grid_overlay_item: _GridOverlayItem | None = None
         self._effective_wafer_area: EffectiveWaferArea | None = None
-        self._effective_area_item: QGraphicsEllipseItem | None = None
+        self._effective_area_item: QGraphicsItem | None = None
         self._space_pressed = False
         self._drag_mode_before_space = QGraphicsView.DragMode.NoDrag
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -78,12 +80,12 @@ class WaferView(QGraphicsView):
         self._rebuild_grid_overlay()
 
     def set_effective_wafer_area(self, area: EffectiveWaferArea | None) -> None:
-        """Set or clear the source-aligned ellipse drawn over the image."""
+        """Set or clear the source-aligned effective-area outline."""
 
         if area is not None and not isinstance(area, EffectiveWaferArea):
             raise ValueError("area must be an EffectiveWaferArea or None")
-        if area is not None and area.shape != "ellipse":
-            raise ValueError("only ellipse effective wafer areas are supported")
+        if area is not None and area.shape not in ("ellipse", "polygon"):
+            raise ValueError("unsupported effective wafer area shape")
         self._effective_wafer_area = area
         self._rebuild_effective_area_overlay()
 
@@ -138,17 +140,24 @@ class WaferView(QGraphicsView):
             self._scene.removeItem(self._effective_area_item)
             self._effective_area_item = None
         area = self._effective_wafer_area
-        if area is None or area.shape != "ellipse":
+        if area is None:
             return
         geometry = area.geometry
-        item = QGraphicsEllipseItem(
-            QRectF(
-                geometry.center_x - geometry.radius_x,
-                geometry.center_y - geometry.radius_y,
-                2 * geometry.radius_x,
-                2 * geometry.radius_y,
+        if area.shape == "ellipse":
+            item: QGraphicsItem = QGraphicsEllipseItem(
+                QRectF(
+                    geometry.center_x - geometry.radius_x,
+                    geometry.center_y - geometry.radius_y,
+                    2 * geometry.radius_x,
+                    2 * geometry.radius_y,
+                )
             )
-        )
+        elif area.shape == "polygon" and isinstance(geometry, PolygonGeometry):
+            item = QGraphicsPolygonItem(
+                QPolygonF([QPointF(point.x, point.y) for point in geometry.vertices])
+            )
+        else:
+            raise ValueError("effective wafer area geometry does not match its shape")
         pen = QPen(QColor("#ffff00"))
         pen.setCosmetic(True)
         pen.setWidth(2)
