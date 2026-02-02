@@ -6,8 +6,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDockWidget,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
@@ -17,6 +19,9 @@ from PySide6.QtWidgets import (
 )
 
 from .image_asset import ImageAsset, ReopenedWaferImage, SourceHealth, _source_health
+from .annotation import GridAnnotation, save_grid_annotation
+from .annotation_tools import AnnotationMode
+from .defect_class import DefectClass, load_defect_classes
 from .effective_area import (
     EffectiveWaferArea,
     confirm_effective_wafer_area,
@@ -91,6 +96,78 @@ class _GridOriginControls(QWidget):
         self.confirm_button.setEnabled(has_area and not confirmed)
 
 
+class _AnnotationToolControls(QWidget):
+    """Visible tool buttons and a compact multi-select Defect Class list."""
+
+    modeChanged = Signal(object)
+    classSelectionChanged = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.mode_label = QLabel("Mode: Pan", self)
+        self.mode_label.setObjectName("annotationModeLabel")
+        self._mode_buttons: dict[AnnotationMode, QPushButton] = {}
+        mode_row = QHBoxLayout()
+        for mode, name in (
+            (AnnotationMode.PAN, "Pan"),
+            (AnnotationMode.ANNOTATE, "Annotate"),
+            (AnnotationMode.PAINT, "Paint"),
+            (AnnotationMode.ERASE, "Erase"),
+        ):
+            button = QPushButton(name, self)
+            button.setCheckable(True)
+            button.setObjectName(f"{name.lower()}ToolButton")
+            button.clicked.connect(lambda _checked, selected=mode: self._choose_mode(selected))
+            mode_row.addWidget(button)
+            self._mode_buttons[mode] = button
+        self._mode_buttons[AnnotationMode.PAN].setChecked(True)
+        self._class_layout = QVBoxLayout()
+        self._class_boxes: dict[str, QCheckBox] = {}
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.mode_label)
+        layout.addLayout(mode_row)
+        layout.addWidget(QLabel("Defect Classes", self))
+        layout.addLayout(self._class_layout)
+
+    def _choose_mode(self, mode: AnnotationMode) -> None:
+        self.set_mode(mode)
+        self.modeChanged.emit(mode)
+
+    def set_mode(self, mode: AnnotationMode | str) -> None:
+        selected = mode if isinstance(mode, AnnotationMode) else AnnotationMode(mode)
+        for candidate, button in self._mode_buttons.items():
+            button.setChecked(candidate is selected)
+        self.mode_label.setText(f"Mode: {selected.value}")
+
+    def set_classes(self, classes: tuple[DefectClass, ...]) -> None:
+        while self._class_layout.count():
+            item = self._class_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._class_boxes.clear()
+        for defect_class in classes:
+            box = QCheckBox(f"{defect_class.code} — {defect_class.name}", self)
+            box.setObjectName(f"defectClass_{defect_class.code}CheckBox")
+            box.setEnabled(defect_class.enabled)
+            box.toggled.connect(self._emit_selected_classes)
+            self._class_layout.addWidget(box)
+            self._class_boxes[defect_class.code] = box
+
+    def set_selected_classes(self, codes) -> None:
+        selected = set(codes)
+        for code, box in self._class_boxes.items():
+            blocked = box.blockSignals(True)
+            box.setChecked(code in selected)
+            box.blockSignals(blocked)
+
+    def selected_classes(self) -> tuple[str, ...]:
+        return tuple(code for code, box in self._class_boxes.items() if box.isChecked())
+
+    def _emit_selected_classes(self, _checked: bool) -> None:
+        self.classSelectionChanged.emit(self.selected_classes())
+
+
 class MainWindow(QMainWindow):
     """Top-level window for Wafer Defect Studio."""
 
@@ -100,6 +177,23 @@ class MainWindow(QMainWindow):
         self._loaded_wafer_image: LoadedWaferImage | None = None
         self._image_view = WaferView()
         self.setCentralWidget(self._image_view)
+        self._annotation_controls = _AnnotationToolControls()
+        self._annotation_controls.modeChanged.connect(self._image_view.set_tool_mode)
+        self._annotation_controls.classSelectionChanged.connect(
+            self._on_annotation_class_selection_changed
+        )
+        self._image_view.modeChanged.connect(self._annotation_controls.set_mode)
+        self._image_view.classSelectionChanged.connect(
+            self._annotation_controls.set_selected_classes
+        )
+        self._image_view.annotationChanged.connect(self._save_annotation_change)
+        self._annotation_tool_dock = QDockWidget("Annotation Tools", self)
+        self._annotation_tool_dock.setObjectName("annotationToolsDock")
+        self._annotation_tool_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._annotation_tool_dock.setWidget(self._annotation_controls)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._annotation_tool_dock)
         self._wafer_loader = WaferLoader(self)
         self._wafer_loader.loaded.connect(self._on_load_ready)
         self._wafer_loader.failed.connect(self._on_load_error)
@@ -163,10 +257,32 @@ class MainWindow(QMainWindow):
             raise GridProfileConflictError("profile is not the persisted latest version")
         self._grid_project_path = resolved_path
         self._grid_profile = profile
+        self._annotation_controls.set_classes(load_defect_classes(resolved_path))
         self._grid_controls.bind(profile)
         self._grid_profile_dock.setEnabled(True)
         self._grid_profile_dock.show()
         self._bind_grid_for_current_image()
+
+    def set_annotation_mode(self, mode: AnnotationMode | str) -> None:
+        """Select the visible canvas tool."""
+
+        self._image_view.set_tool_mode(mode)
+
+    def set_selected_defect_classes(self, codes) -> tuple[str, ...]:
+        """Select the complete Defect Class set used by Annotate/Paint/Erase."""
+
+        self._annotation_controls.set_selected_classes(codes)
+        return self._image_view.set_selected_class_codes(codes)
+
+    def set_class_key(self, code: str, key: str) -> None:
+        """Configure a keyboard key for toggling one Defect Class."""
+
+        self._image_view.set_class_key(code, key)
+
+    def set_defect_classes(self, classes) -> None:
+        """Bind Defect Class checkboxes without requiring a project reopen."""
+
+        self._annotation_controls.set_classes(tuple(classes))
 
     def set_effective_wafer_area(self, area: EffectiveWaferArea | None) -> None:
         """Show the area for the current image and refresh derived participation."""
@@ -190,6 +306,22 @@ class MainWindow(QMainWindow):
             return
         self._grid_controls.apply_button.setEnabled(
             self._grid_controls.draft_dimensions() != (profile.cell_width, profile.cell_height)
+        )
+
+    def _on_annotation_class_selection_changed(self, codes) -> None:
+        self._image_view.set_selected_class_codes(codes)
+
+    def _save_annotation_change(self, row: int, column: int, class_codes) -> None:
+        if self._grid_project_path is None or self._current_image_asset is None:
+            return
+        save_grid_annotation(
+            self._grid_project_path,
+            GridAnnotation(
+                self._current_image_asset.image_asset_id,
+                row,
+                column,
+                tuple(class_codes),
+            ),
         )
 
     def _apply_grid_profile(self) -> None:

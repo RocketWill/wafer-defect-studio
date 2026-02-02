@@ -8,7 +8,7 @@ from math import floor
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QImageReader, QPixmap, QPolygonF, QTransform, QPen
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .effective_area import EffectiveWaferArea, PolygonGeometry
+from .annotation_tools import AnnotationMode, AnnotationToolState, crossed_annotation_cells
 from .grid_overlay import _GridOverlayItem
 from .grid_profile import GridProfile
 
@@ -37,6 +38,10 @@ class LoadedWaferImage:
 class WaferView(QGraphicsView):
     """Graphics view that maps viewport points to native wafer pixels."""
 
+    modeChanged = Signal(str)
+    classSelectionChanged = Signal(object)
+    annotationChanged = Signal(int, int, object)
+
     _ZOOM_FACTOR = 1.25
 
     def __init__(self, parent=None) -> None:
@@ -52,8 +57,56 @@ class WaferView(QGraphicsView):
         self._effective_area_item: QGraphicsItem | None = None
         self._space_pressed = False
         self._drag_mode_before_space = QGraphicsView.DragMode.NoDrag
+        self._tool_state = AnnotationToolState()
+        self._annotations: dict[tuple[int, int], tuple[str, ...]] = {}
+        self._stroke_active = False
+        self._stroke_last_source: tuple[float, float] | None = None
+        self._stroke_seen_cells: set[tuple[int, int]] = set()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+    @property
+    def annotation_mode(self) -> AnnotationMode:
+        """Return the active visible canvas tool."""
+
+        return self._tool_state.mode
+
+    @property
+    def annotations(self) -> dict[tuple[int, int], tuple[str, ...]]:
+        """Return the current source-aligned labels held by the canvas."""
+
+        return dict(self._annotations)
+
+    def set_tool_mode(self, mode: AnnotationMode | str) -> None:
+        """Select Pan, Annotate, Paint, or Erase and expose its active state."""
+
+        selected = self._tool_state.set_mode(mode)
+        if selected is AnnotationMode.PAN:
+            if not self._space_pressed:
+                self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        elif not self._space_pressed:
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.modeChanged.emit(selected.value)
+
+    def set_selected_class_codes(self, codes) -> tuple[str, ...]:
+        """Replace the selected Defect Class set in display order."""
+
+        selected = self._tool_state.set_selected_classes(codes)
+        self.classSelectionChanged.emit(selected)
+        return selected
+
+    def set_class_key(self, code: str, key: str) -> None:
+        """Configure one Defect Class keyboard key."""
+
+        self._tool_state.set_class_key(code, key)
+
+    def set_annotations(self, annotations) -> None:
+        """Seed source-aligned labels for an image without changing geometry."""
+
+        self._annotations = {
+            (int(row), int(column)): tuple(codes)
+            for (row, column), codes in annotations.items()
+        }
 
     def source_pixel_at(self, viewport_position: QPoint) -> tuple[int, int, int] | None:
         """Return the native pixel under a viewport point, if it is in bounds."""
@@ -91,6 +144,7 @@ class WaferView(QGraphicsView):
 
     def _set_loaded_image(self, loaded: LoadedWaferImage, image: QImage) -> None:
         self._loaded_wafer_image = loaded
+        self._annotations = {}
         pixmap = QPixmap.fromImage(image)
         target = self.viewport().size()
         if target.width() <= 0 or target.height() <= 0:
@@ -210,6 +264,15 @@ class WaferView(QGraphicsView):
             self._fit_image()
             event.accept()
             return
+        shortcut_result = self._tool_state.handle_shortcut(event.text())
+        if isinstance(shortcut_result, AnnotationMode):
+            self.set_tool_mode(shortcut_result)
+            event.accept()
+            return
+        if isinstance(shortcut_result, tuple):
+            self.classSelectionChanged.emit(shortcut_result)
+            event.accept()
+            return
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event) -> None:
@@ -223,6 +286,78 @@ class WaferView(QGraphicsView):
         if self._space_pressed:
             self._space_pressed = False
             self.setDragMode(self._drag_mode_before_space)
+
+    def mousePressEvent(self, event) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._tool_state.mode is not AnnotationMode.PAN
+        ):
+            source = self._source_position(event.position().toPoint())
+            if source is not None and self._annotation_grid_profile is not None:
+                self.setFocus()
+                self._stroke_active = True
+                self._stroke_last_source = source
+                self._stroke_seen_cells.clear()
+                self._apply_pointer_segment(source, source)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._stroke_active and event.buttons() & Qt.MouseButton.LeftButton:
+            source = self._source_position(event.position().toPoint())
+            if source is not None and self._stroke_last_source is not None:
+                self._apply_pointer_segment(self._stroke_last_source, source)
+                self._stroke_last_source = source
+                event.accept()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._stroke_active and event.button() == Qt.MouseButton.LeftButton:
+            self._stroke_active = False
+            self._stroke_last_source = None
+            self._stroke_seen_cells.clear()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _source_position(self, viewport_position: QPoint) -> tuple[float, float] | None:
+        loaded = self._loaded_wafer_image
+        if loaded is None:
+            return None
+        point = self.mapToScene(viewport_position)
+        if point.x() < 0 or point.y() < 0 or point.x() >= loaded.width or point.y() >= loaded.height:
+            return None
+        return point.x(), point.y()
+
+    def _apply_pointer_segment(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> None:
+        profile = self._annotation_grid_profile
+        if profile is None:
+            return
+        cells = crossed_annotation_cells(
+            start,
+            end,
+            profile.cell_width,
+            profile.cell_height,
+            self._annotation_grid_origin.x(),
+            self._annotation_grid_origin.y(),
+        )
+        cells = tuple(cell for cell in cells if cell not in self._stroke_seen_cells)
+        if self._tool_state.mode is AnnotationMode.ANNOTATE:
+            cells = cells[:1]
+        if not cells:
+            return
+        self._stroke_seen_cells.update(cells)
+        previous = self._annotations
+        self._annotations = self._tool_state.apply_cells(cells, previous)
+        for row, column in cells:
+            if self._annotations.get((row, column)) != previous.get((row, column)):
+                self.annotationChanged.emit(row, column, self._annotations[(row, column)])
 
 
 def _decode_wafer_image(path: Path) -> tuple[LoadedWaferImage, QImage]:
