@@ -37,6 +37,8 @@ from .grid_profile import (
     save_grid_profile,
 )
 from .image_grid_placement import load_image_grid_placement, set_image_grid_origin
+from .review import ReviewError, load_review_state, mark_image_reviewed, reopen_image
+from .review_counts import ReviewCounts, load_review_counts
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
 
@@ -168,6 +170,50 @@ class _AnnotationToolControls(QWidget):
         self.classSelectionChanged.emit(self.selected_classes())
 
 
+class _ReviewControls(QWidget):
+    """Compact counts and image-level review actions."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.labeled_count_label = QLabel("Labeled: —", self)
+        self.labeled_count_label.setObjectName("labeledGridCountLabel")
+        self.unreviewed_count_label = QLabel("Unreviewed: —", self)
+        self.unreviewed_count_label.setObjectName("unreviewedGridCountLabel")
+        self.derived_normal_count_label = QLabel("Derived Normal: —", self)
+        self.derived_normal_count_label.setObjectName("derivedNormalGridCountLabel")
+        self.excluded_count_label = QLabel("Excluded: —", self)
+        self.excluded_count_label.setObjectName("excludedGridCountLabel")
+        self.mark_button = QPushButton("Mark Reviewed", self)
+        self.mark_button.setObjectName("markImageReviewedButton")
+        self.mark_button.setEnabled(False)
+        self.reopen_button = QPushButton("Reopen Image", self)
+        self.reopen_button.setObjectName("reopenImageButton")
+        self.reopen_button.setEnabled(False)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.labeled_count_label)
+        layout.addWidget(self.unreviewed_count_label)
+        layout.addWidget(self.derived_normal_count_label)
+        layout.addWidget(self.excluded_count_label)
+        layout.addWidget(self.mark_button)
+        layout.addWidget(self.reopen_button)
+
+    def set_counts(self, counts: ReviewCounts | None) -> None:
+        if counts is None:
+            self.labeled_count_label.setText("Labeled: —")
+            self.unreviewed_count_label.setText("Unreviewed: —")
+            self.derived_normal_count_label.setText("Derived Normal: —")
+            self.excluded_count_label.setText("Excluded: —")
+            return
+        self.labeled_count_label.setText(f"Labeled: {counts.labeled}")
+        self.unreviewed_count_label.setText(f"Unreviewed: {counts.unreviewed}")
+        self.derived_normal_count_label.setText(f"Derived Normal: {counts.derived_normal}")
+        self.excluded_count_label.setText(f"Excluded: {counts.excluded}")
+
+    def set_review_state(self, reviewed: bool, available: bool) -> None:
+        self.mark_button.setEnabled(available and not reviewed)
+        self.reopen_button.setEnabled(available and reviewed)
+
+
 class MainWindow(QMainWindow):
     """Top-level window for Wafer Defect Studio."""
 
@@ -194,6 +240,18 @@ class MainWindow(QMainWindow):
         )
         self._annotation_tool_dock.setWidget(self._annotation_controls)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._annotation_tool_dock)
+        self._review_controls = _ReviewControls()
+        self._review_controls.mark_button.clicked.connect(self._mark_current_image_reviewed)
+        self._review_controls.reopen_button.clicked.connect(self._reopen_current_image)
+        self._review_dock = QDockWidget("Review", self)
+        self._review_dock.setObjectName("reviewControlsDock")
+        self._review_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._review_dock.setWidget(self._review_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._review_dock)
+        self._review_dock.setEnabled(False)
+        self._review_dock.hide()
         self._wafer_loader = WaferLoader(self)
         self._wafer_loader.loaded.connect(self._on_load_ready)
         self._wafer_loader.failed.connect(self._on_load_error)
@@ -299,6 +357,7 @@ class MainWindow(QMainWindow):
         self._image_view.set_effective_wafer_area(area)
         self._refresh_participating_grid_count()
         self._refresh_effective_area_confirmation()
+        self._refresh_review_controls()
 
     def _on_grid_draft_changed(self) -> None:
         profile = self._grid_profile
@@ -323,6 +382,7 @@ class MainWindow(QMainWindow):
                 tuple(class_codes),
             ),
         )
+        self._refresh_review_controls()
 
     def _apply_grid_profile(self) -> None:
         if self._grid_project_path is None or self._grid_profile is None:
@@ -389,6 +449,7 @@ class MainWindow(QMainWindow):
         self._image_view.set_effective_wafer_area(area)
         self._refresh_participating_grid_count()
         self._refresh_effective_area_confirmation()
+        self._refresh_review_controls()
 
     def _refresh_participating_grid_count(self) -> None:
         loaded = self._loaded_wafer_image
@@ -414,6 +475,63 @@ class MainWindow(QMainWindow):
             area is not None,
             area.confirmed if area is not None else False,
         )
+
+    def _refresh_review_controls(self) -> None:
+        asset = self._current_image_asset
+        if self._grid_project_path is None or asset is None or self._grid_profile is None:
+            self._review_controls.set_counts(None)
+            self._review_controls.set_review_state(False, False)
+            self._review_dock.setEnabled(False)
+            self._review_dock.hide()
+            return
+
+        self._review_dock.setEnabled(True)
+        self._review_dock.show()
+        try:
+            state = load_review_state(self._grid_project_path, asset.image_asset_id)
+        except ReviewError as error:
+            self._review_controls.set_counts(None)
+            self._review_controls.set_review_state(False, False)
+            self.statusBar().showMessage(f"Review error: {error}")
+            return
+        self._review_controls.set_review_state(state.reviewed, True)
+        try:
+            counts = load_review_counts(self._grid_project_path, asset.image_asset_id)
+        except ReviewError as error:
+            self._review_controls.set_counts(None)
+            self.statusBar().showMessage(f"Review error: {error}")
+            return
+        self._review_controls.set_counts(counts)
+
+    def _mark_current_image_reviewed(self) -> None:
+        if self._grid_project_path is None or self._current_image_asset is None:
+            return
+        try:
+            mark_image_reviewed(
+                self._grid_project_path,
+                self._current_image_asset.image_asset_id,
+            )
+        except ReviewError as error:
+            self.statusBar().showMessage(f"Review error: {error}")
+            self._refresh_review_controls()
+            return
+        self.statusBar().showMessage("Image Reviewed")
+        self._refresh_review_controls()
+
+    def _reopen_current_image(self) -> None:
+        if self._grid_project_path is None or self._current_image_asset is None:
+            return
+        try:
+            reopen_image(
+                self._grid_project_path,
+                self._current_image_asset.image_asset_id,
+            )
+        except ReviewError as error:
+            self.statusBar().showMessage(f"Review error: {error}")
+            self._refresh_review_controls()
+            return
+        self.statusBar().showMessage("Image Reopened")
+        self._refresh_review_controls()
 
     def _confirm_effective_wafer_area(self) -> None:
         if (

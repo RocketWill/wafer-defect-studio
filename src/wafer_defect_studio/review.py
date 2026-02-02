@@ -37,6 +37,7 @@ class _ReviewContext:
     project_path: Path
     image_asset_id: str
     grids: tuple[AnnotationGrid, ...]
+    all_grids: tuple[AnnotationGrid, ...]
 
 
 def mark_image_reviewed(project_path: str | Path, image_asset_id: str) -> ReviewState:
@@ -171,7 +172,7 @@ def _load_review_context(
         raise ReviewError(f"Invalid review geometry for image: {image_asset_id}") from error
     except ProjectError as error:
         raise ReviewError(str(error)) from error
-    return _ReviewContext(project_info.path, image_asset_id, participating)
+    return _ReviewContext(project_info.path, image_asset_id, participating, grids)
 
 
 def _write_review_state(
