@@ -11,6 +11,7 @@ from pathlib import Path
 _SCHEMA_VERSION = 6
 _DEFECT_CLASS_SCHEMA_VERSION = 7
 _GRID_ANNOTATION_SCHEMA_VERSION = 8
+_REVIEW_SCHEMA_VERSION = 9
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -23,6 +24,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _SCHEMA_VERSION,
     _DEFECT_CLASS_SCHEMA_VERSION,
     _GRID_ANNOTATION_SCHEMA_VERSION,
+    _REVIEW_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -89,6 +91,13 @@ _GRID_ANNOTATIONS_TABLE_SQL = (
     "FOREIGN KEY (image_asset_id) REFERENCES image_assets(image_asset_id)"
     ")"
 )
+_IMAGE_REVIEWS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS image_reviews ("
+    "image_asset_id TEXT NOT NULL PRIMARY KEY, "
+    "reviewed INTEGER NOT NULL CHECK (reviewed IN (0, 1)), "
+    "FOREIGN KEY (image_asset_id) REFERENCES image_assets(image_asset_id)"
+    ")"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -128,6 +137,7 @@ _GRID_ANNOTATION_COLUMNS = (
     "column",
     "class_codes_json",
 )
+_IMAGE_REVIEW_COLUMNS = ("image_asset_id", "reviewed")
 
 
 class ProjectError(ValueError):
@@ -222,6 +232,9 @@ def open_project(path: str | Path) -> ProjectInfo:
         grid_annotation_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(grid_annotations)")
         )
+        image_review_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(image_reviews)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -250,6 +263,8 @@ def open_project(path: str | Path) -> ProjectInfo:
         and grid_annotation_columns != _GRID_ANNOTATION_COLUMNS
     ):
         raise ProjectError(f"Invalid grid annotation table: {database_path}")
+    if pragma_version >= _REVIEW_SCHEMA_VERSION and image_review_columns != _IMAGE_REVIEW_COLUMNS:
+        raise ProjectError(f"Invalid image review table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 
