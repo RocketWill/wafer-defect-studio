@@ -272,6 +272,13 @@ class MainWindow(QMainWindow):
         )
         self._annotation_tool_dock.setWidget(self._annotation_controls)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._annotation_tool_dock)
+        # Keep the canvas usable at the default window size until a project
+        # provides at least one Defect Class to annotate.  The tool pane has
+        # four side-by-side buttons and therefore a wide minimum size; leaving
+        # it open before classes are available can consume the entire canvas
+        # (and force the window wider than the requested size).
+        self._annotation_tool_dock.setEnabled(False)
+        self._annotation_tool_dock.hide()
         self._review_controls = _ReviewControls()
         self._review_controls.mark_button.clicked.connect(self._mark_current_image_reviewed)
         self._review_controls.reopen_button.clicked.connect(self._reopen_current_image)
@@ -366,7 +373,10 @@ class MainWindow(QMainWindow):
             raise GridProfileConflictError("profile is not the persisted latest version")
         self._grid_project_path = resolved_path
         self._grid_profile = profile
-        self._annotation_controls.set_classes(load_defect_classes(resolved_path))
+        defect_classes = load_defect_classes(resolved_path)
+        self._annotation_controls.set_classes(defect_classes)
+        self._annotation_tool_dock.setEnabled(bool(defect_classes))
+        self._annotation_tool_dock.setVisible(bool(defect_classes))
         self._grid_controls.bind(profile)
         self._grid_profile_dock.setEnabled(True)
         self._grid_profile_dock.show()

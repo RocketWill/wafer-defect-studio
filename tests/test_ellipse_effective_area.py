@@ -46,21 +46,26 @@ class EllipseEffectiveAreaTest(unittest.TestCase):
             )
             self.assertEqual(area, expected)
             self.assertEqual(project.open_project(project_path).schema_version, 6)
-            with sqlite3.connect(project_path / "project.sqlite") as connection:
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
                 row = connection.execute(
                     "SELECT shape, geometry_json, confirmed FROM effective_wafer_areas"
                 ).fetchone()
-            connection.close()
+            finally:
+                connection.close()
             self.assertEqual(row, ("ellipse", '{"center_x":50,"center_y":40,"radius_x":30,"radius_y":20}', 0))
             self.assertEqual(load_effective_wafer_area(project_path, asset.image_asset_id), expected)
 
             # An edit replaces the row and always clears an earlier confirmation.
-            with sqlite3.connect(project_path / "project.sqlite") as connection:
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
                 connection.execute(
                     "UPDATE effective_wafer_areas SET confirmed = 1 WHERE image_asset_id = ?",
                     (asset.image_asset_id,),
                 )
-            connection.close()
+                connection.commit()
+            finally:
+                connection.close()
             edited = set_effective_ellipse(project_path, asset.image_asset_id, 48, 38, 25, 15)
             self.assertFalse(edited.confirmed)
             self.assertEqual(load_effective_wafer_area(project_path, asset.image_asset_id), edited)
@@ -111,10 +116,14 @@ def _write_fixture(path: Path) -> None:
 
 
 def _downgrade_to_v5(project_path: Path) -> None:
-    with sqlite3.connect(project_path / "project.sqlite") as connection:
+    connection = sqlite3.connect(project_path / "project.sqlite")
+    try:
         connection.execute("DROP TABLE IF EXISTS effective_wafer_areas")
         connection.execute("UPDATE project_metadata SET schema_version = 5")
         connection.execute("PRAGMA user_version = 5")
+        connection.commit()
+    finally:
+        connection.close()
 
 
 if __name__ == "__main__":

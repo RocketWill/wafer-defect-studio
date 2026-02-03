@@ -53,11 +53,13 @@ class PolygonEffectiveAreaTest(unittest.TestCase):
             )
             self.assertEqual(valid, expected)
             self.assertEqual(load_effective_wafer_area(project_path, asset.image_asset_id), expected)
-            with sqlite3.connect(project_path / "project.sqlite") as connection:
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
                 row = connection.execute(
                     "SELECT shape, geometry_json, confirmed FROM effective_wafer_areas"
                 ).fetchone()
-            connection.close()
+            finally:
+                connection.close()
             self.assertEqual(
                 row,
                 (

@@ -116,10 +116,14 @@ class ImageGridOriginTest(unittest.TestCase):
 
 
 def _downgrade_to_v4(project_path: Path) -> None:
-    with sqlite3.connect(project_path / "project.sqlite") as connection:
+    connection = sqlite3.connect(project_path / "project.sqlite")
+    try:
         connection.execute("DROP TABLE IF EXISTS image_grid_placements")
         connection.execute("UPDATE project_metadata SET schema_version = 4")
         connection.execute("PRAGMA user_version = 4")
+        connection.commit()
+    finally:
+        connection.close()
 
 
 if __name__ == "__main__":

@@ -56,10 +56,14 @@ def _write_source(path: Path, value: int) -> None:
 
 
 def _make_v1(project_path: Path) -> None:
-    with sqlite3.connect(project_path / "project.sqlite") as connection:
+    connection = sqlite3.connect(project_path / "project.sqlite")
+    try:
         connection.execute("DROP TABLE image_assets")
         connection.execute("UPDATE project_metadata SET schema_version = 1")
         connection.execute("PRAGMA user_version = 1")
+        connection.commit()
+    finally:
+        connection.close()
 
 
 if __name__ == "__main__":
