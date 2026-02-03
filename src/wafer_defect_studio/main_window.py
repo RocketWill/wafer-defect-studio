@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from .image_asset import ImageAsset, ReopenedWaferImage, SourceHealth, _source_health
 from .annotation import GridAnnotation, save_grid_annotation
 from .annotation_tools import AnnotationMode
+from .autosave import AutosaveGuard, SaveFailureState
 from .defect_class import DefectClass, load_defect_classes
 from .effective_area import (
     EffectiveWaferArea,
@@ -214,6 +215,37 @@ class _ReviewControls(QWidget):
         self.reopen_button.setEnabled(available and reviewed)
 
 
+class _AutosaveFailureControls(QWidget):
+    """Actions shown while one annotation edit is waiting for recovery."""
+
+    retryRequested = Signal()
+    saveAsRequested = Signal()
+    cancelRequested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.message_label = QLabel("Save failed", self)
+        self.message_label.setObjectName("autosaveFailureMessageLabel")
+        self.retry_button = QPushButton("Retry", self)
+        self.retry_button.setObjectName("retryAutosaveButton")
+        self.save_as_button = QPushButton("Save As", self)
+        self.save_as_button.setObjectName("saveAsAutosaveButton")
+        self.cancel_button = QPushButton("Cancel", self)
+        self.cancel_button.setObjectName("cancelAutosaveButton")
+        self.retry_button.clicked.connect(self.retryRequested)
+        self.save_as_button.clicked.connect(self.saveAsRequested)
+        self.cancel_button.clicked.connect(self.cancelRequested)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.message_label)
+        layout.addWidget(self.retry_button)
+        layout.addWidget(self.save_as_button)
+        layout.addWidget(self.cancel_button)
+
+    def set_failure(self, failure: SaveFailureState) -> None:
+        self.message_label.setText(f"Save failed: {failure.error_message}")
+
+
+
 class MainWindow(QMainWindow):
     """Top-level window for Wafer Defect Studio."""
 
@@ -264,6 +296,25 @@ class MainWindow(QMainWindow):
         self._grid_profile: GridProfile | None = None
         self._grid_origin = (0, 0)
         self._effective_wafer_area: EffectiveWaferArea | None = None
+        self._autosave_guard = AutosaveGuard(
+            self._persist_annotation,
+            restore_callback=self._restore_annotation,
+            apply_callback=self._apply_annotation,
+            save_as_callback=self._persist_annotation_as,
+        )
+        self._autosave_failure_controls = _AutosaveFailureControls()
+        self._autosave_failure_controls.retryRequested.connect(self._retry_autosave)
+        self._autosave_failure_controls.saveAsRequested.connect(self._save_as_autosave)
+        self._autosave_failure_controls.cancelRequested.connect(self._cancel_autosave)
+        self._autosave_failure_dock = QDockWidget("Autosave", self)
+        self._autosave_failure_dock.setObjectName("autosaveFailureDock")
+        self._autosave_failure_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._autosave_failure_dock.setWidget(self._autosave_failure_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._autosave_failure_dock)
+        self._autosave_failure_dock.setEnabled(False)
+        self._autosave_failure_dock.hide()
         self._grid_controls = GridProfileControls()
         self._grid_controls.draftChanged.connect(self._on_grid_draft_changed)
         self._grid_controls.apply_button.clicked.connect(self._apply_grid_profile)
@@ -373,16 +424,79 @@ class MainWindow(QMainWindow):
     def _save_annotation_change(self, row: int, column: int, class_codes) -> None:
         if self._grid_project_path is None or self._current_image_asset is None:
             return
-        save_grid_annotation(
-            self._grid_project_path,
-            GridAnnotation(
-                self._current_image_asset.image_asset_id,
-                row,
-                column,
-                tuple(class_codes),
-            ),
+        annotation = GridAnnotation(
+            self._current_image_asset.image_asset_id,
+            row,
+            column,
+            tuple(class_codes),
         )
+        previous = self._image_view.annotations.get((row, column), ())
+        if not self._autosave_guard.autosave(annotation, previous):
+            self._show_autosave_failure()
+            return
         self._refresh_review_controls()
+
+    def _persist_annotation(self, annotation: GridAnnotation) -> None:
+        if self._grid_project_path is None:
+            raise RuntimeError("No project is open")
+        save_grid_annotation(self._grid_project_path, annotation)
+
+    def _persist_annotation_as(self, target_path: Path, annotation: GridAnnotation) -> None:
+        save_grid_annotation(target_path, annotation)
+
+    def _restore_annotation(
+        self, annotation: GridAnnotation, previous_class_codes: tuple[str, ...]
+    ) -> None:
+        annotations = self._image_view.annotations
+        key = (annotation.row, annotation.column)
+        if previous_class_codes:
+            annotations[key] = previous_class_codes
+        else:
+            annotations.pop(key, None)
+        self._image_view.set_annotations(annotations)
+
+    def _apply_annotation(self, annotation: GridAnnotation) -> None:
+        annotations = self._image_view.annotations
+        annotations[(annotation.row, annotation.column)] = annotation.class_codes
+        self._image_view.set_annotations(annotations)
+
+    def _show_autosave_failure(self) -> None:
+        failure = self._autosave_guard.pending
+        if failure is None:
+            return
+        self._autosave_failure_controls.set_failure(failure)
+        self._autosave_failure_dock.setEnabled(True)
+        self._autosave_failure_dock.show()
+        self.statusBar().showMessage(
+            "Save failed: choose Retry, Save As, or Cancel. "
+            f"{failure.error_message}"
+        )
+
+    def _clear_autosave_failure(self, message: str) -> None:
+        self._autosave_failure_dock.setEnabled(False)
+        self._autosave_failure_dock.hide()
+        self.statusBar().showMessage(message)
+
+    def _retry_autosave(self) -> None:
+        if self._autosave_guard.retry():
+            self._clear_autosave_failure("Annotation saved")
+            self._refresh_review_controls()
+            return
+        self._show_autosave_failure()
+
+    def _save_as_autosave(self) -> None:
+        if self._grid_project_path is None:
+            self.statusBar().showMessage("Save As unavailable: no project is open")
+            return
+        if self._autosave_guard.save_as(self._grid_project_path):
+            self._clear_autosave_failure("Annotation saved")
+            self._refresh_review_controls()
+            return
+        self._show_autosave_failure()
+
+    def _cancel_autosave(self) -> None:
+        if self._autosave_guard.cancel():
+            self._clear_autosave_failure("Annotation save cancelled")
 
     def _apply_grid_profile(self) -> None:
         if self._grid_project_path is None or self._grid_profile is None:
@@ -575,6 +689,9 @@ class MainWindow(QMainWindow):
         """Start decoding *asset* without blocking the GUI thread."""
 
         asset = selection.asset if isinstance(selection, ReopenedWaferImage) else selection
+        if not self._autosave_guard.request_image_switch(asset.image_asset_id):
+            self._show_autosave_failure()
+            return
         self._latest_load_token += 1
         health = _source_health(asset)
         if health is SourceHealth.MISSING:
