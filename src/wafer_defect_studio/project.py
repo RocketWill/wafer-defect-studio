@@ -14,6 +14,7 @@ _GRID_ANNOTATION_SCHEMA_VERSION = 8
 _REVIEW_SCHEMA_VERSION = 9
 _TRAINING_SCOPE_SCHEMA_VERSION = 10
 _DATASET_SNAPSHOT_SCHEMA_VERSION = 11
+_DATASET_SPLIT_SCHEMA_VERSION = 12
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -29,6 +30,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _REVIEW_SCHEMA_VERSION,
     _TRAINING_SCOPE_SCHEMA_VERSION,
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
+    _DATASET_SPLIT_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -122,6 +124,11 @@ _DATASET_SNAPSHOTS_TABLE_SQL = (
     "CREATE TABLE IF NOT EXISTS dataset_snapshots ("
     "snapshot_id TEXT NOT NULL PRIMARY KEY, created_at TEXT NOT NULL, payload_json TEXT NOT NULL)"
 )
+_DATASET_SPLITS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS dataset_splits ("
+    "split_id TEXT NOT NULL PRIMARY KEY, snapshot_id TEXT NOT NULL, seed INTEGER NOT NULL, "
+    "payload_json TEXT NOT NULL, FOREIGN KEY (snapshot_id) REFERENCES dataset_snapshots(snapshot_id))"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -166,6 +173,7 @@ _DATA_GROUP_COLUMNS = ("data_group_id", "name", "display_order")
 _IMAGE_DATA_GROUP_COLUMNS = ("image_asset_id", "data_group_id")
 _TRAINING_SCOPE_COLUMNS = ("singleton", "data_group_ids_json", "class_codes_json")
 _DATASET_SNAPSHOT_COLUMNS = ("snapshot_id", "created_at", "payload_json")
+_DATASET_SPLIT_COLUMNS = ("split_id", "snapshot_id", "seed", "payload_json")
 
 
 class ProjectError(ValueError):
@@ -275,6 +283,9 @@ def open_project(path: str | Path) -> ProjectInfo:
         dataset_snapshot_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(dataset_snapshots)")
         )
+        dataset_split_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(dataset_splits)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -317,6 +328,8 @@ def open_project(path: str | Path) -> ProjectInfo:
         and dataset_snapshot_columns != _DATASET_SNAPSHOT_COLUMNS
     ):
         raise ProjectError(f"Invalid Dataset Snapshot table: {database_path}")
+    if pragma_version >= _DATASET_SPLIT_SCHEMA_VERSION and dataset_split_columns != _DATASET_SPLIT_COLUMNS:
+        raise ProjectError(f"Invalid Dataset Split table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 
