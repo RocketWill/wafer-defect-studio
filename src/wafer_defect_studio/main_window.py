@@ -40,6 +40,9 @@ from .grid_profile import (
 from .image_grid_placement import load_image_grid_placement, set_image_grid_origin
 from .review import ReviewError, load_review_state, mark_image_reviewed, reopen_image
 from .review_counts import ReviewCounts, load_review_counts
+from .training_scope_controls import SnapshotCreator, TrainingScopeControls
+from .training_scope import DataGroup
+from .dataset_diagnostics import DatasetPreview
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
 
@@ -347,6 +350,15 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._grid_origin_dock)
         self._grid_origin_dock.setEnabled(False)
         self._grid_origin_dock.hide()
+        self._training_scope_controls = TrainingScopeControls()
+        self._training_scope_dock = QDockWidget("Dataset Snapshot", self)
+        self._training_scope_dock.setObjectName("datasetSnapshotDock")
+        self._training_scope_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._training_scope_dock.setWidget(self._training_scope_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._training_scope_dock)
+        self._training_scope_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
@@ -402,6 +414,18 @@ class MainWindow(QMainWindow):
         """Bind Defect Class checkboxes without requiring a project reopen."""
 
         self._annotation_controls.set_classes(tuple(classes))
+
+    def configure_dataset_snapshot(
+        self,
+        groups: tuple[DataGroup, ...],
+        classes: tuple[DefectClass, ...],
+        preview: DatasetPreview,
+        creator: SnapshotCreator,
+    ) -> None:
+        """Expose a prepared Training Scope preview and asynchronous creator."""
+
+        self._training_scope_controls.configure(groups, classes, preview, creator)
+        self._training_scope_dock.show()
 
     def set_effective_wafer_area(self, area: EffectiveWaferArea | None) -> None:
         """Show the area for the current image and refresh derived participation."""
