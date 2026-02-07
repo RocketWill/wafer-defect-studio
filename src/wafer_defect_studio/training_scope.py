@@ -14,6 +14,8 @@ from .project import (
     _IMAGE_DATA_GROUPS_TABLE_SQL,
     _REVIEW_SCHEMA_VERSION,
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
+    _DATASET_SPLIT_SCHEMA_VERSION,
+    _TRAINING_RUN_SCHEMA_VERSION,
     _TRAINING_SCOPE_SCHEMA_VERSION,
     _TRAINING_SCOPE_TABLE_SQL,
     ProjectError,
@@ -68,7 +70,9 @@ def assign_image_to_data_group(
     _identifier(data_group_id, "data_group_id")
     project_info = open_project(project_path)
     if project_info.schema_version not in (
-        _TRAINING_SCOPE_SCHEMA_VERSION, _DATASET_SNAPSHOT_SCHEMA_VERSION
+        _TRAINING_SCOPE_SCHEMA_VERSION,
+        _DATASET_SNAPSHOT_SCHEMA_VERSION,
+        _TRAINING_RUN_SCHEMA_VERSION,
     ):
         raise TrainingScopeError("Data Groups must be saved before assigning images")
     connection = sqlite3.connect(project_info.path / "project.sqlite")
@@ -92,7 +96,9 @@ def save_training_scope(project_path: str | Path, scope: TrainingScope) -> None:
         raise ValueError("scope must be a TrainingScope")
     project_info = open_project(project_path)
     if project_info.schema_version not in (
-        _TRAINING_SCOPE_SCHEMA_VERSION, _DATASET_SNAPSHOT_SCHEMA_VERSION
+        _TRAINING_SCOPE_SCHEMA_VERSION,
+        _DATASET_SNAPSHOT_SCHEMA_VERSION,
+        _TRAINING_RUN_SCHEMA_VERSION,
     ):
         raise TrainingScopeError("Data Groups must be saved before Training Scope")
     connection = sqlite3.connect(project_info.path / "project.sqlite")
@@ -173,7 +179,12 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str, database_pat
         if updated != 1:
             raise TrainingScopeError(f"Invalid project metadata: {database_path}")
         connection.execute(f"PRAGMA user_version = {_TRAINING_SCOPE_SCHEMA_VERSION}")
-    elif version not in (_TRAINING_SCOPE_SCHEMA_VERSION, _DATASET_SNAPSHOT_SCHEMA_VERSION):
+    elif version not in (
+        _TRAINING_SCOPE_SCHEMA_VERSION,
+        _DATASET_SNAPSHOT_SCHEMA_VERSION,
+        _DATASET_SPLIT_SCHEMA_VERSION,
+        _TRAINING_RUN_SCHEMA_VERSION,
+    ):
         raise TrainingScopeError("Training Scope requires project schema 9 or newer")
 
 

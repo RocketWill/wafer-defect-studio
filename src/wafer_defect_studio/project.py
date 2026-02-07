@@ -15,6 +15,7 @@ _REVIEW_SCHEMA_VERSION = 9
 _TRAINING_SCOPE_SCHEMA_VERSION = 10
 _DATASET_SNAPSHOT_SCHEMA_VERSION = 11
 _DATASET_SPLIT_SCHEMA_VERSION = 12
+_TRAINING_RUN_SCHEMA_VERSION = 13
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -31,6 +32,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _TRAINING_SCOPE_SCHEMA_VERSION,
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
     _DATASET_SPLIT_SCHEMA_VERSION,
+    _TRAINING_RUN_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -129,6 +131,24 @@ _DATASET_SPLITS_TABLE_SQL = (
     "split_id TEXT NOT NULL PRIMARY KEY, snapshot_id TEXT NOT NULL, seed INTEGER NOT NULL, "
     "payload_json TEXT NOT NULL, FOREIGN KEY (snapshot_id) REFERENCES dataset_snapshots(snapshot_id))"
 )
+_TRAINING_RUNS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS training_runs ("
+    "run_id TEXT NOT NULL PRIMARY KEY, "
+    "created_at TEXT NOT NULL, "
+    "snapshot_id TEXT NOT NULL, "
+    "split_id TEXT NOT NULL, "
+    "parent_run_id TEXT, "
+    "config_json TEXT NOT NULL, "
+    "environment_json TEXT NOT NULL, "
+    "metrics_json TEXT NOT NULL, "
+    "log_text TEXT NOT NULL DEFAULT '', "
+    "terminal_status TEXT NOT NULL CHECK(terminal_status IN "
+    "('created', 'running', 'completed', 'cancelled', 'failed', 'interrupted')), "
+    "terminal_message TEXT NOT NULL DEFAULT '', "
+    "staging_path TEXT, "
+    "artifact_path TEXT"
+    ")"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -174,6 +194,21 @@ _IMAGE_DATA_GROUP_COLUMNS = ("image_asset_id", "data_group_id")
 _TRAINING_SCOPE_COLUMNS = ("singleton", "data_group_ids_json", "class_codes_json")
 _DATASET_SNAPSHOT_COLUMNS = ("snapshot_id", "created_at", "payload_json")
 _DATASET_SPLIT_COLUMNS = ("split_id", "snapshot_id", "seed", "payload_json")
+_TRAINING_RUN_COLUMNS = (
+    "run_id",
+    "created_at",
+    "snapshot_id",
+    "split_id",
+    "parent_run_id",
+    "config_json",
+    "environment_json",
+    "metrics_json",
+    "log_text",
+    "terminal_status",
+    "terminal_message",
+    "staging_path",
+    "artifact_path",
+)
 
 
 class ProjectError(ValueError):
@@ -286,6 +321,9 @@ def open_project(path: str | Path) -> ProjectInfo:
         dataset_split_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(dataset_splits)")
         )
+        training_run_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(training_runs)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -330,6 +368,8 @@ def open_project(path: str | Path) -> ProjectInfo:
         raise ProjectError(f"Invalid Dataset Snapshot table: {database_path}")
     if pragma_version >= _DATASET_SPLIT_SCHEMA_VERSION and dataset_split_columns != _DATASET_SPLIT_COLUMNS:
         raise ProjectError(f"Invalid Dataset Split table: {database_path}")
+    if pragma_version >= _TRAINING_RUN_SCHEMA_VERSION and training_run_columns != _TRAINING_RUN_COLUMNS:
+        raise ProjectError(f"Invalid Training Run table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 
