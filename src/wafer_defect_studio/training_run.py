@@ -14,7 +14,7 @@ import os
 import sqlite3
 import uuid
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,8 @@ from .project import (
 _INITIAL_STATUS = "created"
 _STATUSES = {"created", "running", "completed", "cancelled", "failed", "interrupted"}
 _TERMINAL_STATUSES = {"completed", "cancelled", "failed", "interrupted"}
+_OOM_ERROR_CODES = {"out_of_memory", "oom"}
+_CHECKPOINT_NAME = "model.pt"
 _IMMUTABLE_COLUMNS = (
     "run_id",
     "created_at",
@@ -265,6 +267,7 @@ def update_training_run_terminal(
     log: str | None = None,
     message: str = "",
     terminal_message: str | None = None,
+    error_code: str | None = None,
     environment: Mapping[str, Any] | None = None,
     staging_path: str | Path | None = None,
 ) -> TrainingRun:
@@ -279,6 +282,8 @@ def update_training_run_terminal(
         if not isinstance(terminal_message, str):
             raise ValueError("terminal_message must be a string")
         message = terminal_message
+    if error_code is not None:
+        _require_text(error_code, "error_code")
     info = open_project(project_path)
     if info.schema_version < _TRAINING_RUN_SCHEMA_VERSION:
         raise TrainingRunError("Training Run schema is not available")
@@ -286,6 +291,9 @@ def update_training_run_terminal(
     if current.status in _TERMINAL_STATUSES and status != current.status:
         raise TrainingRunError("terminal Training Runs are immutable")
     metrics_value = current.metrics if metrics is None else _json_mapping(metrics, "metrics")
+    if error_code is not None:
+        metrics_value = dict(metrics_value)
+        metrics_value["error_code"] = error_code
     environment_value = (
         current.environment
         if environment is None
@@ -331,6 +339,61 @@ def update_training_run_terminal(
     finally:
         connection.close()
     return load_training_run(info.path, run_id)
+
+
+def resume_training_run(
+    project_path: str | Path,
+    parent_run_id: str,
+    *,
+    new_run_id: str | None = None,
+    config_overrides: Mapping[str, Any] | None = None,
+    environment: Mapping[str, Any] | None = None,
+) -> TrainingRun:
+    """Create a new child run from a terminal run with a valid checkpoint."""
+
+    parent = load_training_run(project_path, parent_run_id)
+    if parent.status not in _TERMINAL_STATUSES:
+        raise TrainingRunError("resume requires a terminal parent Training Run")
+    if not _has_checkpoint(parent):
+        raise TrainingRunError("resume requires a validated model.pt checkpoint")
+    config = _child_config(parent.config, config_overrides)
+    inherited_environment = parent.environment if environment is None else environment
+    return create_training_run(
+        project_path,
+        config,
+        parent_run_id=parent.run_id,
+        environment=inherited_environment,
+        run_id=new_run_id,
+    )
+
+
+def clone_after_oom(
+    project_path: str | Path,
+    parent_run_id: str,
+    *,
+    batch_size: int,
+    new_run_id: str | None = None,
+    environment: Mapping[str, Any] | None = None,
+) -> TrainingRun:
+    """Create an explicit smaller-batch child for a failed OOM run."""
+
+    parent = load_training_run(project_path, parent_run_id)
+    if parent.status != "failed":
+        raise TrainingRunError("OOM clone requires a failed parent Training Run")
+    if not _is_oom_run(parent):
+        raise TrainingRunError("OOM clone requires an out_of_memory failure")
+    _require_positive_int(batch_size, "batch_size")
+    if batch_size >= parent.config.batch_size:
+        raise TrainingRunError("OOM clone batch_size must be smaller than the parent")
+    config = _child_config(parent.config, {"batch_size": batch_size})
+    inherited_environment = parent.environment if environment is None else environment
+    return create_training_run(
+        project_path,
+        config,
+        parent_run_id=parent.run_id,
+        environment=inherited_environment,
+        run_id=new_run_id,
+    )
 
 
 def validate_staged_artifacts(staging_path: str | Path) -> tuple[Path, ...]:
@@ -396,6 +459,8 @@ def publish_staged_artifacts(
 create_run = create_training_run
 load_run = load_training_run
 update_run_terminal = update_training_run_terminal
+resume_run = resume_training_run
+clone_run_after_oom = clone_after_oom
 
 
 def _ensure_schema(connection: sqlite3.Connection, project_id: str, database_path: Path) -> None:
@@ -489,6 +554,52 @@ def _decode_mapping(serialized: str, name: str) -> dict[str, Any]:
     return value
 
 
+def _child_config(
+    parent: RunConfig,
+    overrides: Mapping[str, Any] | None,
+) -> RunConfig:
+    if overrides is None:
+        override_values: dict[str, Any] = {}
+    elif isinstance(overrides, Mapping):
+        override_values = dict(overrides)
+    else:
+        raise ValueError("config_overrides must be a mapping")
+    fields_by_name = {item.name for item in fields(RunConfig)}
+    unknown = set(override_values) - fields_by_name
+    if unknown:
+        raise ValueError(f"unsupported config override: {sorted(unknown)!r}")
+    preserved = {"snapshot_id", "split_id", "class_count"}
+    changed_preserved = preserved.intersection(override_values)
+    if changed_preserved:
+        raise TrainingRunError(
+            "child Training Runs must preserve snapshot_id, split_id, and class_count"
+        )
+    values = asdict(parent)
+    values.update(override_values)
+    return RunConfig(**values)
+
+
+def _has_checkpoint(run: TrainingRun) -> bool:
+    for candidate in (run.artifact_path, run.staging_path):
+        if candidate is None or not candidate.is_dir():
+            continue
+        try:
+            validated = validate_staged_artifacts(candidate)
+        except TrainingRunError:
+            continue
+        if any(path.name == _CHECKPOINT_NAME for path in validated):
+            return True
+    return False
+
+
+def _is_oom_run(run: TrainingRun) -> bool:
+    code = run.metrics.get("error_code")
+    if isinstance(code, str) and code.lower() in _OOM_ERROR_CODES:
+        return True
+    normalized = run.terminal_message.lower().replace("-", "_").replace(" ", "_")
+    return "out_of_memory" in normalized or "oom" in normalized.split("_")
+
+
 def _validate_run_id(value: object) -> None:
     _require_text(value, "run_id")
     if any(character in str(value) for character in ("/", "\\", "..")):
@@ -533,10 +644,14 @@ __all__ = [
     "TrainingRunError",
     "create_run",
     "create_training_run",
+    "clone_after_oom",
+    "clone_run_after_oom",
     "load_run",
     "load_training_run",
     "publish_staged_artifacts",
     "update_run_terminal",
     "update_training_run_terminal",
     "validate_staged_artifacts",
+    "resume_run",
+    "resume_training_run",
 ]
