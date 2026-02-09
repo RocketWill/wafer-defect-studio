@@ -43,6 +43,7 @@ from .review_counts import ReviewCounts, load_review_counts
 from .training_scope_controls import SnapshotCreator, TrainingScopeControls
 from .training_scope import DataGroup
 from .dataset_diagnostics import DatasetPreview
+from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
 
@@ -359,6 +360,15 @@ class MainWindow(QMainWindow):
         self._training_scope_dock.setWidget(self._training_scope_controls)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._training_scope_dock)
         self._training_scope_dock.hide()
+        self._training_controls = TrainingControls()
+        self._training_dock = QDockWidget("Training", self)
+        self._training_dock.setObjectName("trainingDock")
+        self._training_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._training_dock.setWidget(self._training_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._training_dock)
+        self._training_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
@@ -426,6 +436,28 @@ class MainWindow(QMainWindow):
 
         self._training_scope_controls.configure(groups, classes, preview, creator)
         self._training_scope_dock.show()
+
+    def configure_training(
+        self,
+        request: TrainingRequestSource,
+        *,
+        launcher: TrainingLauncher | None = None,
+        clone_callback: CloneCallback | None = None,
+    ) -> None:
+        """Show background Training controls bound to a value-only worker request."""
+
+        self._training_controls.configure(
+            request,
+            launcher=launcher,
+            clone_callback=clone_callback,
+        )
+        self._training_dock.setEnabled(True)
+        self._training_dock.show()
+
+    def start_training(self) -> None:
+        """Start the configured training request without blocking the GUI."""
+
+        self._training_controls.start_training()
 
     def set_effective_wafer_area(self, area: EffectiveWaferArea | None) -> None:
         """Show the area for the current image and refresh derived participation."""
