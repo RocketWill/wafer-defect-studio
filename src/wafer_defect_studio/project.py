@@ -16,6 +16,7 @@ _TRAINING_SCOPE_SCHEMA_VERSION = 10
 _DATASET_SNAPSHOT_SCHEMA_VERSION = 11
 _DATASET_SPLIT_SCHEMA_VERSION = 12
 _TRAINING_RUN_SCHEMA_VERSION = 13
+_EVALUATION_SCHEMA_VERSION = 14
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -33,6 +34,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
     _DATASET_SPLIT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
+    _EVALUATION_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -149,6 +151,34 @@ _TRAINING_RUNS_TABLE_SQL = (
     "artifact_path TEXT"
     ")"
 )
+_EVALUATION_RUNS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS evaluation_runs ("
+    "evaluation_id TEXT NOT NULL PRIMARY KEY, "
+    "training_run_id TEXT NOT NULL, "
+    "snapshot_id TEXT NOT NULL, "
+    "split_id TEXT NOT NULL, "
+    "created_at TEXT NOT NULL, "
+    "environment_json TEXT NOT NULL, "
+    "criteria_json TEXT NOT NULL, "
+    "metrics_json TEXT NOT NULL, "
+    "thresholds_json TEXT NOT NULL, "
+    "target_satisfied INTEGER NOT NULL CHECK (target_satisfied IN (0, 1)), "
+    "notes TEXT NOT NULL"
+    ")"
+)
+_EVALUATION_DECISIONS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS evaluation_decisions ("
+    "decision_id TEXT NOT NULL PRIMARY KEY, "
+    "evaluation_id TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK (status IN ('candidate', 'validated', 'approved')), "
+    "actor TEXT NOT NULL, "
+    "decided_at TEXT NOT NULL, "
+    "criteria_json TEXT NOT NULL, "
+    "target_satisfied INTEGER NOT NULL CHECK (target_satisfied IN (0, 1)), "
+    "notes TEXT NOT NULL, "
+    "FOREIGN KEY (evaluation_id) REFERENCES evaluation_runs(evaluation_id)"
+    ")"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -208,6 +238,29 @@ _TRAINING_RUN_COLUMNS = (
     "terminal_message",
     "staging_path",
     "artifact_path",
+)
+_EVALUATION_RUN_COLUMNS = (
+    "evaluation_id",
+    "training_run_id",
+    "snapshot_id",
+    "split_id",
+    "created_at",
+    "environment_json",
+    "criteria_json",
+    "metrics_json",
+    "thresholds_json",
+    "target_satisfied",
+    "notes",
+)
+_EVALUATION_DECISION_COLUMNS = (
+    "decision_id",
+    "evaluation_id",
+    "status",
+    "actor",
+    "decided_at",
+    "criteria_json",
+    "target_satisfied",
+    "notes",
 )
 
 
@@ -324,6 +377,12 @@ def open_project(path: str | Path) -> ProjectInfo:
         training_run_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(training_runs)")
         )
+        evaluation_run_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(evaluation_runs)")
+        )
+        evaluation_decision_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(evaluation_decisions)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -370,6 +429,11 @@ def open_project(path: str | Path) -> ProjectInfo:
         raise ProjectError(f"Invalid Dataset Split table: {database_path}")
     if pragma_version >= _TRAINING_RUN_SCHEMA_VERSION and training_run_columns != _TRAINING_RUN_COLUMNS:
         raise ProjectError(f"Invalid Training Run table: {database_path}")
+    if pragma_version >= _EVALUATION_SCHEMA_VERSION:
+        if evaluation_run_columns != _EVALUATION_RUN_COLUMNS:
+            raise ProjectError(f"Invalid Evaluation table: {database_path}")
+        if evaluation_decision_columns != _EVALUATION_DECISION_COLUMNS:
+            raise ProjectError(f"Invalid Evaluation decision table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 

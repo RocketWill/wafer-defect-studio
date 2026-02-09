@@ -15,6 +15,7 @@ from .project import (
     _TRAINING_SCOPE_SCHEMA_VERSION,
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
+    _EVALUATION_SCHEMA_VERSION,
     ProjectError,
     open_project,
 )
@@ -44,7 +45,7 @@ def save_grid_annotation(
     project_info = open_project(project_path)
     if project_info.schema_version < _DEFECT_CLASS_SCHEMA_VERSION:
         raise GridAnnotationError("Grid Annotations require project schema 7 or newer")
-    if project_info.schema_version > _TRAINING_RUN_SCHEMA_VERSION:
+    if project_info.schema_version > _EVALUATION_SCHEMA_VERSION:
         raise GridAnnotationError(
             f"Unsupported project schema: {project_info.path / 'project.sqlite'}"
         )
@@ -57,7 +58,7 @@ def save_grid_annotation(
         schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
         if schema_version < _DEFECT_CLASS_SCHEMA_VERSION:
             raise GridAnnotationError("Grid Annotations require project schema 7 or newer")
-        if schema_version > _TRAINING_RUN_SCHEMA_VERSION:
+        if schema_version > _EVALUATION_SCHEMA_VERSION:
             raise GridAnnotationError(f"Unsupported project schema: {database_path}")
 
         image_exists = connection.execute(
@@ -127,7 +128,7 @@ def load_grid_annotation(
     project_info = open_project(project_path)
     if project_info.schema_version < _DEFECT_CLASS_SCHEMA_VERSION:
         raise GridAnnotationError("Grid Annotations require project schema 7 or newer")
-    if project_info.schema_version > _TRAINING_RUN_SCHEMA_VERSION:
+    if project_info.schema_version > _EVALUATION_SCHEMA_VERSION:
         raise GridAnnotationError(
             f"Unsupported project schema: {project_info.path / 'project.sqlite'}"
         )

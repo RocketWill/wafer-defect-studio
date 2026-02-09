@@ -18,6 +18,7 @@ from .project import (
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
     _TRAINING_SCOPE_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
+    _EVALUATION_SCHEMA_VERSION,
     ProjectError,
     open_project,
 )
@@ -224,6 +225,7 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str, database: Pa
         _DATASET_SNAPSHOT_SCHEMA_VERSION,
         _DATASET_SPLIT_SCHEMA_VERSION,
         _TRAINING_RUN_SCHEMA_VERSION,
+        _EVALUATION_SCHEMA_VERSION,
     ):
         raise DatasetSnapshotError("Dataset Snapshots require project schema 10 or newer")
 

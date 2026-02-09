@@ -22,6 +22,7 @@ from typing import Any
 from .project import (
     _DATASET_SPLIT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
+    _EVALUATION_SCHEMA_VERSION,
     _TRAINING_RUNS_TABLE_SQL,
     ProjectError,
     open_project,
@@ -492,8 +493,8 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str, database_pat
         if updated != 1:
             raise TrainingRunError(f"Invalid project metadata: {database_path}")
         connection.execute(f"PRAGMA user_version = {_TRAINING_RUN_SCHEMA_VERSION}")
-    elif version != _TRAINING_RUN_SCHEMA_VERSION:
-        raise TrainingRunError("Training Runs require project schema 12 or 13")
+    elif version not in (_TRAINING_RUN_SCHEMA_VERSION, _EVALUATION_SCHEMA_VERSION):
+        raise TrainingRunError("Training Runs require project schema 12 or newer")
 
 
 def _manifest_entries(manifest: dict[str, Any]) -> tuple[tuple[str, str], ...]:
