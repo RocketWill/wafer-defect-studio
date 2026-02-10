@@ -43,6 +43,7 @@ from .review_counts import ReviewCounts, load_review_counts
 from .training_scope_controls import SnapshotCreator, TrainingScopeControls
 from .training_scope import DataGroup
 from .dataset_diagnostics import DatasetPreview
+from .evaluation_controls import DecisionService, EvaluationControls
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -369,6 +370,15 @@ class MainWindow(QMainWindow):
         self._training_dock.setWidget(self._training_controls)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._training_dock)
         self._training_dock.hide()
+        self._evaluation_controls = EvaluationControls()
+        self._evaluation_dock = QDockWidget("Evaluation", self)
+        self._evaluation_dock.setObjectName("evaluationDock")
+        self._evaluation_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._evaluation_dock.setWidget(self._evaluation_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._evaluation_dock)
+        self._evaluation_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
@@ -453,6 +463,26 @@ class MainWindow(QMainWindow):
         )
         self._training_dock.setEnabled(True)
         self._training_dock.show()
+
+    def configure_evaluation(
+        self,
+        evaluation,
+        decisions=(),
+        *,
+        decision_service: DecisionService | None = None,
+        approval_callback: DecisionService | None = None,
+    ) -> None:
+        """Show Grid Evaluation review controls using value objects and a service seam."""
+
+        if decision_service is not None and approval_callback is not None:
+            raise ValueError("pass either decision_service or approval_callback, not both")
+        self._evaluation_controls.configure(
+            evaluation,
+            decisions,
+            decision_service=decision_service or approval_callback,
+        )
+        self._evaluation_dock.setEnabled(True)
+        self._evaluation_dock.show()
 
     def start_training(self) -> None:
         """Start the configured training request without blocking the GUI."""
