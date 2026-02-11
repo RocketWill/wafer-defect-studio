@@ -16,6 +16,7 @@ from .project import (
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
     _EVALUATION_SCHEMA_VERSION,
+    _DETECTION_SCHEMA_VERSION,
     _SCHEMA_VERSION,
     ProjectError,
     open_project,
@@ -57,7 +58,7 @@ def save_defect_classes(
     project_info = open_project(project_path)
     if project_info.schema_version < _SCHEMA_VERSION:
         raise DefectClassError("Defect classes require project schema 6 or newer")
-    if project_info.schema_version > _EVALUATION_SCHEMA_VERSION:
+    if project_info.schema_version > _DETECTION_SCHEMA_VERSION:
         raise DefectClassError(f"Unsupported project schema: {project_info.path / 'project.sqlite'}")
 
     database_path = project_info.path / "project.sqlite"
@@ -83,6 +84,7 @@ def save_defect_classes(
             _DATASET_SNAPSHOT_SCHEMA_VERSION,
             _TRAINING_RUN_SCHEMA_VERSION,
             _EVALUATION_SCHEMA_VERSION,
+            _DETECTION_SCHEMA_VERSION,
         ):
             raise DefectClassError(f"Unsupported project schema: {database_path}")
 
@@ -121,7 +123,7 @@ def load_defect_classes(project_path: str | Path) -> tuple[DefectClass, ...]:
     project_info = open_project(project_path)
     if project_info.schema_version < _DEFECT_CLASS_SCHEMA_VERSION:
         return ()
-    if project_info.schema_version > _EVALUATION_SCHEMA_VERSION:
+    if project_info.schema_version > _DETECTION_SCHEMA_VERSION:
         raise DefectClassError(f"Unsupported project schema: {project_info.path / 'project.sqlite'}")
 
     database_path = project_info.path / "project.sqlite"

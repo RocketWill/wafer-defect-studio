@@ -17,6 +17,7 @@ from .project import (
     _DATASET_SPLIT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
     _EVALUATION_SCHEMA_VERSION,
+    _DETECTION_SCHEMA_VERSION,
     _TRAINING_SCOPE_SCHEMA_VERSION,
     _TRAINING_SCOPE_TABLE_SQL,
     ProjectError,
@@ -75,6 +76,7 @@ def assign_image_to_data_group(
         _DATASET_SNAPSHOT_SCHEMA_VERSION,
         _TRAINING_RUN_SCHEMA_VERSION,
         _EVALUATION_SCHEMA_VERSION,
+        _DETECTION_SCHEMA_VERSION,
     ):
         raise TrainingScopeError("Data Groups must be saved before assigning images")
     connection = sqlite3.connect(project_info.path / "project.sqlite")
@@ -102,6 +104,7 @@ def save_training_scope(project_path: str | Path, scope: TrainingScope) -> None:
         _DATASET_SNAPSHOT_SCHEMA_VERSION,
         _TRAINING_RUN_SCHEMA_VERSION,
         _EVALUATION_SCHEMA_VERSION,
+        _DETECTION_SCHEMA_VERSION,
     ):
         raise TrainingScopeError("Data Groups must be saved before Training Scope")
     connection = sqlite3.connect(project_info.path / "project.sqlite")
@@ -188,6 +191,7 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str, database_pat
         _DATASET_SPLIT_SCHEMA_VERSION,
         _TRAINING_RUN_SCHEMA_VERSION,
         _EVALUATION_SCHEMA_VERSION,
+        _DETECTION_SCHEMA_VERSION,
     ):
         raise TrainingScopeError("Training Scope requires project schema 9 or newer")
 

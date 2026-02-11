@@ -15,6 +15,7 @@ from .project import (
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
     _EVALUATION_SCHEMA_VERSION,
+    _DETECTION_SCHEMA_VERSION,
     ProjectError,
     open_project,
 )
@@ -122,6 +123,7 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str) -> None:
         _DATASET_SPLIT_SCHEMA_VERSION,
         _TRAINING_RUN_SCHEMA_VERSION,
         _EVALUATION_SCHEMA_VERSION,
+        _DETECTION_SCHEMA_VERSION,
     ):
         raise DatasetSplitError("Dataset Splits require project schema 11 or newer")
 

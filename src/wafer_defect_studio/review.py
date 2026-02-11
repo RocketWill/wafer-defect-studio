@@ -19,6 +19,7 @@ from .project import (
     _DATASET_SNAPSHOT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
     _EVALUATION_SCHEMA_VERSION,
+    _DETECTION_SCHEMA_VERSION,
     ProjectError,
     open_project,
 )
@@ -185,7 +186,7 @@ def _write_review_state(
     project_info = open_project(project_path)
     if project_info.schema_version < _GRID_ANNOTATION_SCHEMA_VERSION:
         raise ReviewError("Image review requires project schema 8 or newer")
-    if project_info.schema_version > _EVALUATION_SCHEMA_VERSION:
+    if project_info.schema_version > _DETECTION_SCHEMA_VERSION:
         raise ReviewError(f"Unsupported project schema: {project_info.path / 'project.sqlite'}")
 
     database_path = project_info.path / "project.sqlite"
@@ -210,6 +211,7 @@ def _write_review_state(
             _DATASET_SNAPSHOT_SCHEMA_VERSION,
             _TRAINING_RUN_SCHEMA_VERSION,
             _EVALUATION_SCHEMA_VERSION,
+            _DETECTION_SCHEMA_VERSION,
         ):
             raise ReviewError(f"Unsupported project schema: {database_path}")
 

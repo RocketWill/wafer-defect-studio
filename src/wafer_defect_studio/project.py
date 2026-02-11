@@ -17,6 +17,7 @@ _DATASET_SNAPSHOT_SCHEMA_VERSION = 11
 _DATASET_SPLIT_SCHEMA_VERSION = 12
 _TRAINING_RUN_SCHEMA_VERSION = 13
 _EVALUATION_SCHEMA_VERSION = 14
+_DETECTION_SCHEMA_VERSION = 15
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -35,6 +36,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _DATASET_SPLIT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
     _EVALUATION_SCHEMA_VERSION,
+    _DETECTION_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -179,6 +181,32 @@ _EVALUATION_DECISIONS_TABLE_SQL = (
     "FOREIGN KEY (evaluation_id) REFERENCES evaluation_runs(evaluation_id)"
     ")"
 )
+_DETECTION_PROFILES_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS detection_profiles ("
+    "profile_id TEXT NOT NULL PRIMARY KEY, "
+    "created_at TEXT NOT NULL, "
+    "evaluation_id TEXT NOT NULL, "
+    "training_run_id TEXT NOT NULL, "
+    "model_fingerprint TEXT NOT NULL, "
+    "settings_json TEXT NOT NULL, "
+    "FOREIGN KEY (evaluation_id) REFERENCES evaluation_runs(evaluation_id))"
+)
+_DETECTION_RUNS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS detection_runs ("
+    "detection_run_id TEXT NOT NULL PRIMARY KEY, "
+    "created_at TEXT NOT NULL, "
+    "evaluation_id TEXT NOT NULL, "
+    "training_run_id TEXT NOT NULL, "
+    "profile_id TEXT NOT NULL, "
+    "model_fingerprint TEXT NOT NULL, "
+    "source_fingerprints_json TEXT NOT NULL, "
+    "provenance_json TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK (status IN ('created', 'running', 'completed', 'cancelled', 'failed', 'interrupted')), "
+    "staging_path TEXT, "
+    "artifact_path TEXT, "
+    "FOREIGN KEY (evaluation_id) REFERENCES evaluation_runs(evaluation_id), "
+    "FOREIGN KEY (profile_id) REFERENCES detection_profiles(profile_id))"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -261,6 +289,27 @@ _EVALUATION_DECISION_COLUMNS = (
     "criteria_json",
     "target_satisfied",
     "notes",
+)
+_DETECTION_PROFILE_COLUMNS = (
+    "profile_id",
+    "created_at",
+    "evaluation_id",
+    "training_run_id",
+    "model_fingerprint",
+    "settings_json",
+)
+_DETECTION_RUN_COLUMNS = (
+    "detection_run_id",
+    "created_at",
+    "evaluation_id",
+    "training_run_id",
+    "profile_id",
+    "model_fingerprint",
+    "source_fingerprints_json",
+    "provenance_json",
+    "status",
+    "staging_path",
+    "artifact_path",
 )
 
 
@@ -383,6 +432,12 @@ def open_project(path: str | Path) -> ProjectInfo:
         evaluation_decision_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(evaluation_decisions)")
         )
+        detection_profile_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(detection_profiles)")
+        )
+        detection_run_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(detection_runs)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -434,6 +489,11 @@ def open_project(path: str | Path) -> ProjectInfo:
             raise ProjectError(f"Invalid Evaluation table: {database_path}")
         if evaluation_decision_columns != _EVALUATION_DECISION_COLUMNS:
             raise ProjectError(f"Invalid Evaluation decision table: {database_path}")
+    if pragma_version >= _DETECTION_SCHEMA_VERSION:
+        if detection_profile_columns != _DETECTION_PROFILE_COLUMNS:
+            raise ProjectError(f"Invalid Detection Profile table: {database_path}")
+        if detection_run_columns != _DETECTION_RUN_COLUMNS:
+            raise ProjectError(f"Invalid Detection Run table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 

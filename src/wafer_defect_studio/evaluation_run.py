@@ -16,6 +16,7 @@ from .project import (
     _EVALUATION_DECISIONS_TABLE_SQL,
     _EVALUATION_RUNS_TABLE_SQL,
     _EVALUATION_SCHEMA_VERSION,
+    _DETECTION_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
     ProjectError,
     open_project,
@@ -398,8 +399,8 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str, database: Pa
         if updated != 1:
             raise EvaluationRunError(f"Invalid project metadata: {database}")
         connection.execute(f"PRAGMA user_version = {_EVALUATION_SCHEMA_VERSION}")
-    elif version != _EVALUATION_SCHEMA_VERSION:
-        raise EvaluationRunError("Evaluations require project schema 13 or 14")
+    elif version not in (_EVALUATION_SCHEMA_VERSION, _DETECTION_SCHEMA_VERSION):
+        raise EvaluationRunError("Evaluations require project schema 13 or newer")
 
 
 def _target_satisfied(
