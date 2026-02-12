@@ -44,6 +44,7 @@ from .training_scope_controls import SnapshotCreator, TrainingScopeControls
 from .training_scope import DataGroup
 from .dataset_diagnostics import DatasetPreview
 from .evaluation_controls import DecisionService, EvaluationControls
+from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -379,6 +380,15 @@ class MainWindow(QMainWindow):
         self._evaluation_dock.setWidget(self._evaluation_controls)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._evaluation_dock)
         self._evaluation_dock.hide()
+        self._detection_controls = DetectionControls()
+        self._detection_dock = QDockWidget("Detection", self)
+        self._detection_dock.setObjectName("detectionControlsDock")
+        self._detection_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._detection_dock.setWidget(self._detection_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._detection_dock)
+        self._detection_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
@@ -483,6 +493,42 @@ class MainWindow(QMainWindow):
         )
         self._evaluation_dock.setEnabled(True)
         self._evaluation_dock.show()
+
+    def configure_detection(
+        self,
+        artifact=None,
+        request: DetectionRequestSource | None = None,
+        *,
+        launcher: DetectionLauncher | None = None,
+        request_source: DetectionRequestSource | None = None,
+    ) -> None:
+        """Show native-coordinate Detection layers using value-only services."""
+
+        self._detection_controls.configure(
+            artifact,
+            request,
+            launcher=launcher,
+            request_source=request_source,
+        )
+        self._detection_dock.setEnabled(True)
+        self._detection_dock.show()
+
+    def set_detection_artifact(self, artifact) -> None:
+        """Refresh the displayed Detection map without touching project state."""
+
+        self._detection_controls.set_artifact(artifact)
+        self._detection_dock.setEnabled(artifact is not None)
+        self._detection_dock.setVisible(artifact is not None)
+
+    def start_detection(self) -> None:
+        """Start the configured Detection worker without blocking the GUI."""
+
+        self._detection_controls.start_detection()
+
+    def cancel_detection(self) -> None:
+        """Request cancellation; terminal status still comes from the worker."""
+
+        self._detection_controls.cancel_detection()
 
     def start_training(self) -> None:
         """Start the configured training request without blocking the GUI."""
