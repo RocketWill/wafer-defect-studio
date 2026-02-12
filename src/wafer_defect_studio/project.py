@@ -18,6 +18,7 @@ _DATASET_SPLIT_SCHEMA_VERSION = 12
 _TRAINING_RUN_SCHEMA_VERSION = 13
 _EVALUATION_SCHEMA_VERSION = 14
 _DETECTION_SCHEMA_VERSION = 15
+_PROPOSAL_SCHEMA_VERSION = 16
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -37,6 +38,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _TRAINING_RUN_SCHEMA_VERSION,
     _EVALUATION_SCHEMA_VERSION,
     _DETECTION_SCHEMA_VERSION,
+    _PROPOSAL_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -207,6 +209,21 @@ _DETECTION_RUNS_TABLE_SQL = (
     "FOREIGN KEY (evaluation_id) REFERENCES evaluation_runs(evaluation_id), "
     "FOREIGN KEY (profile_id) REFERENCES detection_profiles(profile_id))"
 )
+_DEFECT_PROPOSALS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS defect_proposals ("
+    "proposal_id TEXT NOT NULL PRIMARY KEY, "
+    "detection_run_id TEXT NOT NULL, "
+    "profile_id TEXT NOT NULL, "
+    "class_name TEXT NOT NULL, "
+    "source_rect_json TEXT NOT NULL, "
+    "area INTEGER NOT NULL CHECK (area > 0), "
+    "peak_confidence REAL NOT NULL CHECK (peak_confidence >= 0 AND peak_confidence <= 1), "
+    "mean_confidence REAL NOT NULL CHECK (mean_confidence >= 0 AND mean_confidence <= 1), "
+    "provenance_json TEXT NOT NULL, "
+    "FOREIGN KEY (detection_run_id) REFERENCES detection_runs(detection_run_id), "
+    "FOREIGN KEY (profile_id) REFERENCES detection_profiles(profile_id)"
+    ")"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -310,6 +327,17 @@ _DETECTION_RUN_COLUMNS = (
     "status",
     "staging_path",
     "artifact_path",
+)
+_DEFECT_PROPOSAL_COLUMNS = (
+    "proposal_id",
+    "detection_run_id",
+    "profile_id",
+    "class_name",
+    "source_rect_json",
+    "area",
+    "peak_confidence",
+    "mean_confidence",
+    "provenance_json",
 )
 
 
@@ -438,6 +466,9 @@ def open_project(path: str | Path) -> ProjectInfo:
         detection_run_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(detection_runs)")
         )
+        defect_proposal_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(defect_proposals)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -494,6 +525,9 @@ def open_project(path: str | Path) -> ProjectInfo:
             raise ProjectError(f"Invalid Detection Profile table: {database_path}")
         if detection_run_columns != _DETECTION_RUN_COLUMNS:
             raise ProjectError(f"Invalid Detection Run table: {database_path}")
+    if pragma_version >= _PROPOSAL_SCHEMA_VERSION:
+        if defect_proposal_columns != _DEFECT_PROPOSAL_COLUMNS:
+            raise ProjectError(f"Invalid Defect Proposal table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 
