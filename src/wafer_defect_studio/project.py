@@ -19,6 +19,7 @@ _TRAINING_RUN_SCHEMA_VERSION = 13
 _EVALUATION_SCHEMA_VERSION = 14
 _DETECTION_SCHEMA_VERSION = 15
 _PROPOSAL_SCHEMA_VERSION = 16
+_PROPOSAL_REVIEW_SCHEMA_VERSION = 17
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -39,6 +40,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _EVALUATION_SCHEMA_VERSION,
     _DETECTION_SCHEMA_VERSION,
     _PROPOSAL_SCHEMA_VERSION,
+    _PROPOSAL_REVIEW_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -224,6 +226,18 @@ _DEFECT_PROPOSALS_TABLE_SQL = (
     "FOREIGN KEY (profile_id) REFERENCES detection_profiles(profile_id)"
     ")"
 )
+_PROPOSAL_REVIEW_REVISIONS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS proposal_review_revisions ("
+    "proposal_id TEXT NOT NULL, "
+    "revision_number INTEGER NOT NULL CHECK (revision_number > 0), "
+    "status TEXT NOT NULL CHECK (status IN "
+    "('unreviewed', 'accepted', 'rejected', 'corrected')), "
+    "source_rect_json TEXT NOT NULL, "
+    "provenance_json TEXT NOT NULL, "
+    "PRIMARY KEY (proposal_id, revision_number), "
+    "FOREIGN KEY (proposal_id) REFERENCES defect_proposals(proposal_id)"
+    ")"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -337,6 +351,13 @@ _DEFECT_PROPOSAL_COLUMNS = (
     "area",
     "peak_confidence",
     "mean_confidence",
+    "provenance_json",
+)
+_PROPOSAL_REVIEW_REVISION_COLUMNS = (
+    "proposal_id",
+    "revision_number",
+    "status",
+    "source_rect_json",
     "provenance_json",
 )
 
@@ -469,6 +490,10 @@ def open_project(path: str | Path) -> ProjectInfo:
         defect_proposal_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(defect_proposals)")
         )
+        proposal_review_revision_columns = tuple(
+            row[1]
+            for row in connection.execute("PRAGMA table_info(proposal_review_revisions)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -528,6 +553,9 @@ def open_project(path: str | Path) -> ProjectInfo:
     if pragma_version >= _PROPOSAL_SCHEMA_VERSION:
         if defect_proposal_columns != _DEFECT_PROPOSAL_COLUMNS:
             raise ProjectError(f"Invalid Defect Proposal table: {database_path}")
+    if pragma_version >= _PROPOSAL_REVIEW_SCHEMA_VERSION:
+        if proposal_review_revision_columns != _PROPOSAL_REVIEW_REVISION_COLUMNS:
+            raise ProjectError(f"Invalid Proposal Review table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 
