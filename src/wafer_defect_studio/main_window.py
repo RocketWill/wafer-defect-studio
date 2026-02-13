@@ -45,6 +45,7 @@ from .training_scope import DataGroup
 from .dataset_diagnostics import DatasetPreview
 from .evaluation_controls import DecisionService, EvaluationControls
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
+from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -389,6 +390,16 @@ class MainWindow(QMainWindow):
         self._detection_dock.setWidget(self._detection_controls)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._detection_dock)
         self._detection_dock.hide()
+        self._proposal_review_controls = ProposalReviewControls()
+        self._proposal_review_dock = QDockWidget("Proposal Review", self)
+        self._proposal_review_dock.setObjectName("proposalReviewDock")
+        self._proposal_review_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._proposal_review_dock.setWidget(self._proposal_review_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._proposal_review_dock)
+        self._proposal_review_dock.setEnabled(False)
+        self._proposal_review_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
@@ -519,6 +530,13 @@ class MainWindow(QMainWindow):
         self._detection_controls.set_artifact(artifact)
         self._detection_dock.setEnabled(artifact is not None)
         self._detection_dock.setVisible(artifact is not None)
+
+    def configure_proposal_review(self, items, review_callback: ReviewCallback | None) -> None:
+        """Show pure Review Queue values with an injected append-only callback."""
+
+        self._proposal_review_controls.configure(items, review_callback)
+        self._proposal_review_dock.setEnabled(True)
+        self._proposal_review_dock.show()
 
     def start_detection(self) -> None:
         """Start the configured Detection worker without blocking the GUI."""
