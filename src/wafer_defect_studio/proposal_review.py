@@ -16,6 +16,7 @@ from .project import (
     _PROPOSAL_REVIEW_REVISIONS_TABLE_SQL,
     _PROPOSAL_REVIEW_SCHEMA_VERSION,
     _PROPOSAL_SCHEMA_VERSION,
+    _PROPOSAL_CONVERSION_SCHEMA_VERSION,
     ProjectError,
     open_project,
 )
@@ -119,7 +120,7 @@ def record_review(
     info = open_project(project_path)
     if info.schema_version < _PROPOSAL_SCHEMA_VERSION:
         raise ProposalReviewError("Proposal review requires project schema 16 or newer")
-    if info.schema_version > _PROPOSAL_REVIEW_SCHEMA_VERSION:
+    if info.schema_version > _PROPOSAL_CONVERSION_SCHEMA_VERSION:
         raise ProposalReviewError(f"Unsupported project schema: {info.path / 'project.sqlite'}")
 
     database = info.path / "project.sqlite"
@@ -274,7 +275,7 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str, database: Pa
     elif version == _PROPOSAL_REVIEW_SCHEMA_VERSION:
         connection.execute(_PROPOSAL_REVIEW_REVISIONS_TABLE_SQL)
         _create_immutable_triggers(connection)
-    elif version < _PROPOSAL_SCHEMA_VERSION or version > _PROPOSAL_REVIEW_SCHEMA_VERSION:
+    elif version < _PROPOSAL_SCHEMA_VERSION or version > _PROPOSAL_CONVERSION_SCHEMA_VERSION:
         raise ProposalReviewError(f"Unsupported project schema: {database}")
 
 

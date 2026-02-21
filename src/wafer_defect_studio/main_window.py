@@ -46,6 +46,7 @@ from .dataset_diagnostics import DatasetPreview
 from .evaluation_controls import DecisionService, EvaluationControls
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .proposal_controls import ProposalReviewControls, ReviewCallback
+from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -400,6 +401,16 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._proposal_review_dock)
         self._proposal_review_dock.setEnabled(False)
         self._proposal_review_dock.hide()
+        self._proposal_conversion_controls = ProposalConversionControls()
+        self._proposal_conversion_dock = QDockWidget("Proposal Conversion", self)
+        self._proposal_conversion_dock.setObjectName("proposalConversionDock")
+        self._proposal_conversion_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._proposal_conversion_dock.setWidget(self._proposal_conversion_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._proposal_conversion_dock)
+        self._proposal_conversion_dock.setEnabled(False)
+        self._proposal_conversion_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
@@ -537,6 +548,17 @@ class MainWindow(QMainWindow):
         self._proposal_review_controls.configure(items, review_callback)
         self._proposal_review_dock.setEnabled(True)
         self._proposal_review_dock.show()
+
+    def configure_proposal_conversion(
+        self,
+        preview,
+        confirmation_callback: ConversionCallback | None,
+    ) -> None:
+        """Show a conversion preview with an explicit callback confirmation gate."""
+
+        self._proposal_conversion_controls.configure(preview, confirmation_callback)
+        self._proposal_conversion_dock.setEnabled(True)
+        self._proposal_conversion_dock.show()
 
     def start_detection(self) -> None:
         """Start the configured Detection worker without blocking the GUI."""

@@ -20,6 +20,7 @@ _EVALUATION_SCHEMA_VERSION = 14
 _DETECTION_SCHEMA_VERSION = 15
 _PROPOSAL_SCHEMA_VERSION = 16
 _PROPOSAL_REVIEW_SCHEMA_VERSION = 17
+_PROPOSAL_CONVERSION_SCHEMA_VERSION = 18
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -41,6 +42,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _DETECTION_SCHEMA_VERSION,
     _PROPOSAL_SCHEMA_VERSION,
     _PROPOSAL_REVIEW_SCHEMA_VERSION,
+    _PROPOSAL_CONVERSION_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -238,6 +240,19 @@ _PROPOSAL_REVIEW_REVISIONS_TABLE_SQL = (
     "FOREIGN KEY (proposal_id) REFERENCES defect_proposals(proposal_id)"
     ")"
 )
+_PROPOSAL_CONVERSIONS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS proposal_conversions ("
+    "conversion_id TEXT NOT NULL PRIMARY KEY, "
+    "image_asset_id TEXT NOT NULL, "
+    "affected_cells_json TEXT NOT NULL, "
+    "class_codes_json TEXT NOT NULL, "
+    "proposal_ids_json TEXT NOT NULL, "
+    "provenance_json TEXT NOT NULL, "
+    "actor TEXT, "
+    "converted_at TEXT NOT NULL, "
+    "FOREIGN KEY (image_asset_id) REFERENCES image_assets(image_asset_id)"
+    ")"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -360,6 +375,18 @@ _PROPOSAL_REVIEW_REVISION_COLUMNS = (
     "source_rect_json",
     "provenance_json",
 )
+_PROPOSAL_CONVERSION_COLUMNS = (
+    "conversion_id",
+    "image_asset_id",
+    "affected_cells_json",
+    "class_codes_json",
+    "proposal_ids_json",
+    "provenance_json",
+    "actor",
+    "converted_at",
+)
+# Keep a plural alias for callers that mirror the table name.
+_PROPOSAL_CONVERSIONS_COLUMNS = _PROPOSAL_CONVERSION_COLUMNS
 
 
 class ProjectError(ValueError):
@@ -494,6 +521,9 @@ def open_project(path: str | Path) -> ProjectInfo:
             row[1]
             for row in connection.execute("PRAGMA table_info(proposal_review_revisions)")
         )
+        proposal_conversion_columns = tuple(
+            row[1] for row in connection.execute("PRAGMA table_info(proposal_conversions)")
+        )
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -556,6 +586,9 @@ def open_project(path: str | Path) -> ProjectInfo:
     if pragma_version >= _PROPOSAL_REVIEW_SCHEMA_VERSION:
         if proposal_review_revision_columns != _PROPOSAL_REVIEW_REVISION_COLUMNS:
             raise ProjectError(f"Invalid Proposal Review table: {database_path}")
+    if pragma_version >= _PROPOSAL_CONVERSION_SCHEMA_VERSION:
+        if proposal_conversion_columns != _PROPOSAL_CONVERSION_COLUMNS:
+            raise ProjectError(f"Invalid Proposal Conversion table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 

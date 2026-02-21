@@ -17,6 +17,7 @@ from .project import (
     _DETECTION_SCHEMA_VERSION,
     _PROPOSAL_SCHEMA_VERSION,
     _PROPOSAL_REVIEW_SCHEMA_VERSION,
+    _PROPOSAL_CONVERSION_SCHEMA_VERSION,
     ProjectError,
     open_project,
 )
@@ -183,8 +184,12 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str, database: Pa
         if updated != 1:
             raise ProposalStoreError(f"Invalid project metadata: {database}")
         connection.execute(f"PRAGMA user_version = {_PROPOSAL_SCHEMA_VERSION}")
-    elif version not in (_PROPOSAL_SCHEMA_VERSION, _PROPOSAL_REVIEW_SCHEMA_VERSION):
-        raise ProposalStoreError("Defect Proposals require project schema 15, 16, or 17")
+    elif version not in (
+        _PROPOSAL_SCHEMA_VERSION,
+        _PROPOSAL_REVIEW_SCHEMA_VERSION,
+        _PROPOSAL_CONVERSION_SCHEMA_VERSION,
+    ):
+        raise ProposalStoreError("Defect Proposals require project schema 15 through 18")
 
 
 def _decode_row(row: Sequence[Any]) -> DefectProposal:
