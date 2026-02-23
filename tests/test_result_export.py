@@ -4,6 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QApplication
+
 from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.proposal_generation import DefectProposal
 from wafer_defect_studio.proposal_review import ProposalReviewRevision
@@ -15,6 +19,7 @@ from wafer_defect_studio.result_export import (
     build_reviewed_rows,
     export_proposals_csv,
     export_proposals_json,
+    export_proposals_png,
 )
 
 
@@ -102,6 +107,36 @@ class ResultExportTest(unittest.TestCase):
             self.assertEqual(proposal["review_status"], "corrected")
             self.assertEqual(proposal["revision_number"], 2)
             self.assertEqual(proposal["revision_provenance"]["actor"], "工程師")
+
+    def test_png_preserves_native_size_and_records_legend_without_mutating_source(self):
+        app = QApplication.instance() or QApplication([])
+        source = QImage(8, 6, QImage.Format_Grayscale8)
+        source.fill(80)
+        source_before = source.copy()
+        confidence_map = np.full((6, 8), np.nan, dtype=np.float32)
+        confidence_map[2, 3] = 0.9
+
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "影像結果.png"
+            written = export_proposals_png(
+                destination,
+                source,
+                self._reviewed_rows(),
+                selected_class="刮痕",
+                confidence_map=confidence_map,
+                grid_rects=(Rect(0, 0, 4, 3),),
+            )
+            self.assertEqual(written, destination)
+            self.assertTrue(source == source_before)
+
+            rendered = QImage(str(destination))
+            self.assertEqual((rendered.width(), rendered.height()), (8, 6))
+            self.assertEqual(rendered.text("selected_class"), "刮痕")
+            self.assertIn("confidence", rendered.text("legend").lower())
+            self.assertIn("approximate", rendered.text("localization_warning").lower())
+            self.assertEqual(rendered.text("source_coordinate_system"), "source-image-pixels")
+            self.assertNotEqual(rendered.pixelColor(3, 2), source.pixelColor(3, 2))
+        app.processEvents()
 
 
 if __name__ == "__main__":

@@ -19,6 +19,10 @@ from numbers import Real
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen
+
 from .detection_windows import Rect
 from .proposal_generation import DefectProposal
 from .proposal_queue import ReviewQueueItem, build_review_queue
@@ -30,6 +34,7 @@ APPROXIMATE_LOCALIZATION_WARNING = (
 )
 JSON_SCHEMA_VERSION = 1
 JSON_EXPORT_TYPE = "reviewed_detection_results"
+_HEADLESS_QT_APP: QGuiApplication | None = None
 
 # Keep this order stable: it is the machine-readable CSV contract.
 CSV_COLUMNS = (
@@ -284,6 +289,144 @@ write_proposals_json = export_proposals_json
 write_json = export_proposals_json
 
 
+def export_proposals_png(
+    destination: str | os.PathLike[str],
+    source_image: QImage,
+    rows: Iterable[ReviewedProposalRow],
+    *,
+    selected_class: str,
+    confidence_map: np.ndarray | Sequence[Sequence[Real]] | None = None,
+    grid_rects: Iterable[Rect | Sequence[int] | Mapping[str, Any]] = (),
+    overwrite: bool = True,
+) -> Path:
+    """Render a native-size reviewed detection image to PNG.
+
+    The source image is copied before any drawing.  Confidence values are
+    interpreted in source-image pixel coordinates; NaN values remain
+    transparent and finite values are colourized from blue (low) to red
+    (high).  Proposal and optional grid rectangles are drawn over that copy.
+    """
+
+    if not isinstance(source_image, QImage) or source_image.isNull():
+        raise ValueError("source_image must be a non-empty QImage")
+    selected_name = _text(selected_class, "selected_class")
+    path = Path(destination)
+    if path.exists() and not overwrite:
+        raise FileExistsError(path)
+    values = tuple(rows)
+    if any(not isinstance(row, ReviewedProposalRow) for row in values):
+        raise TypeError("rows must contain ReviewedProposalRow values")
+
+    # QPainter text rendering requires a live Qt GUI application.  Normal UI
+    # callers already have one; headless export callers get a minimal one.
+    global _HEADLESS_QT_APP
+    if QGuiApplication.instance() is None:
+        _HEADLESS_QT_APP = QGuiApplication([])
+
+    width, height = source_image.width(), source_image.height()
+    rendered = source_image.convertToFormat(QImage.Format_ARGB32)
+    if confidence_map is not None:
+        _paint_confidence_map(rendered, confidence_map)
+
+    painter = QPainter(rendered)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        _paint_proposal_rectangles(painter, values, selected_name)
+        _paint_grid_rectangles(painter, grid_rects)
+        legend = _legend_text(selected_name)
+        legend_height = min(height, max(18, min(48, height)))
+        painter.fillRect(0, 0, width, legend_height, QColor(0, 0, 0, 190))
+        painter.setPen(QPen(QColor("#ffffff")))
+        painter.setFont(QFont("Arial", 9))
+        painter.drawText(
+            2,
+            2,
+            max(1, width - 4),
+            max(1, legend_height - 2),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
+            legend,
+        )
+    finally:
+        painter.end()
+
+    legend = _legend_text(selected_name)
+    rendered.setText("legend", legend)
+    rendered.setText("selected_class", selected_name)
+    rendered.setText("confidence_meaning", "Confidence is a per-pixel score from 0 (low) to 1 (high).")
+    rendered.setText("source_coordinate_system", SOURCE_COORDINATE_SYSTEM)
+    rendered.setText("localization_warning", APPROXIMATE_LOCALIZATION_WARNING)
+    if not rendered.save(str(path), "PNG"):
+        raise OSError(f"failed to write PNG: {path}")
+    return path
+
+
+write_proposals_png = export_proposals_png
+write_png = export_proposals_png
+
+
+def _paint_confidence_map(rendered: QImage, confidence_map: Any) -> None:
+    try:
+        values = np.asarray(confidence_map, dtype=np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError("confidence_map must be a numeric two-dimensional array") from error
+    if values.shape != (rendered.height(), rendered.width()):
+        raise ValueError("confidence_map dimensions must match the source image")
+    overlay = QImage(rendered.size(), QImage.Format_ARGB32)
+    overlay.fill(0)
+    for y in range(rendered.height()):
+        for x in range(rendered.width()):
+            value = values[y, x]
+            if np.isnan(value):
+                continue
+            if not np.isfinite(value) or not 0.0 <= float(value) <= 1.0:
+                raise ValueError("confidence_map values must be NaN or in the range 0 to 1")
+            strength = float(value)
+            overlay.setPixelColor(
+                x,
+                y,
+                QColor(
+                    int(round(255.0 * strength)),
+                    35,
+                    int(round(255.0 * (1.0 - strength))),
+                    125,
+                ),
+            )
+    painter = QPainter(rendered)
+    try:
+        painter.drawImage(0, 0, overlay)
+    finally:
+        painter.end()
+
+
+def _paint_proposal_rectangles(
+    painter: QPainter,
+    rows: Sequence[ReviewedProposalRow],
+    selected_class: str,
+) -> None:
+    for row in sorted(rows, key=lambda value: value.proposal_id):
+        color = "#ffd400" if row.class_name == selected_class else "#00d9ff"
+        painter.setPen(QPen(QColor(color), 1))
+        rect = row.source_rect
+        painter.drawRect(rect.x, rect.y, max(0, rect.width - 1), max(0, rect.height - 1))
+
+
+def _paint_grid_rectangles(
+    painter: QPainter,
+    grid_rects: Iterable[Rect | Sequence[int] | Mapping[str, Any]],
+) -> None:
+    painter.setPen(QPen(QColor("#66ff66"), 1, Qt.PenStyle.DashLine))
+    for value in grid_rects:
+        rect = _coerce_rect(value)
+        painter.drawRect(rect.x, rect.y, max(0, rect.width - 1), max(0, rect.height - 1))
+
+
+def _legend_text(selected_class: str) -> str:
+    return (
+        f"Class: {selected_class} | confidence: 0 (low) to 1 (high) | "
+        "Approximate localization (not a segmentation mask) | coordinates: source-image-pixels"
+    )
+
+
 def _json_metadata(rows: Sequence[ReviewedProposalRow]) -> dict[str, Any]:
     if not rows:
         raise ValueError("at least one ReviewedProposalRow is required")
@@ -471,9 +614,12 @@ __all__ = [
     "build_reviewed_rows",
     "canonical_reviewed_rows",
     "export_proposals_csv",
+    "export_proposals_png",
     "export_proposals_json",
     "write_csv",
     "write_json",
+    "write_png",
     "write_proposals_csv",
     "write_proposals_json",
+    "write_proposals_png",
 ]
