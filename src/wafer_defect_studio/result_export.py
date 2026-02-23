@@ -28,6 +28,8 @@ SOURCE_COORDINATE_SYSTEM = "source-image-pixels"
 APPROXIMATE_LOCALIZATION_WARNING = (
     "Approximate weak localization: proposal geometry is not a pixel-accurate segmentation mask."
 )
+JSON_SCHEMA_VERSION = 1
+JSON_EXPORT_TYPE = "reviewed_detection_results"
 
 # Keep this order stable: it is the machine-readable CSV contract.
 CSV_COLUMNS = (
@@ -241,6 +243,73 @@ write_proposals_csv = export_proposals_csv
 write_csv = export_proposals_csv
 
 
+def export_proposals_json(
+    destination: str | os.PathLike[str],
+    rows: Iterable[ReviewedProposalRow],
+    *,
+    overwrite: bool = True,
+) -> Path:
+    """Write a versioned, deterministic UTF-8 JSON export.
+
+    All rows in one document must share the immutable project/image/run/profile
+    context.  The check prevents a document from claiming one run while
+    carrying rows from another run.
+    """
+
+    path = Path(destination)
+    if path.exists() and not overwrite:
+        raise FileExistsError(path)
+    values = tuple(rows)
+    if any(not isinstance(row, ReviewedProposalRow) for row in values):
+        raise TypeError("rows must contain ReviewedProposalRow values")
+    metadata = _json_metadata(values)
+    payload = {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "export_type": JSON_EXPORT_TYPE,
+        "metadata": metadata,
+        "proposals": [row.to_dict() for row in sorted(values, key=lambda item: item.proposal_id)],
+    }
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+        separators=(",", ": "),
+    )
+    path.write_text(serialized + "\n", encoding="utf-8")
+    return path
+
+
+write_proposals_json = export_proposals_json
+write_json = export_proposals_json
+
+
+def _json_metadata(rows: Sequence[ReviewedProposalRow]) -> dict[str, Any]:
+    if not rows:
+        raise ValueError("at least one ReviewedProposalRow is required")
+    first = rows[0]
+    identity = (first.project_id, first.image_asset_id, first.run_id, first.profile_id)
+    for row in rows[1:]:
+        if (row.project_id, row.image_asset_id, row.run_id, row.profile_id) != identity:
+            raise ValueError("all rows must share project/image/run/profile identifiers")
+        if row.source_coordinate_system != first.source_coordinate_system:
+            raise ValueError("all rows must share a source coordinate system")
+        if row.localization_warning != first.localization_warning:
+            raise ValueError("all rows must share a localization warning")
+    project_id, image_asset_id, run_id, profile_id = identity
+    return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "export_type": JSON_EXPORT_TYPE,
+        "project_id": project_id,
+        "image_asset_id": image_asset_id,
+        "run_id": run_id,
+        "profile_id": profile_id,
+        "source_coordinate_system": first.source_coordinate_system,
+        "localization_warning": first.localization_warning,
+        "approximate_localization": True,
+    }
+
+
 def _context(
     context: ExportContext | Mapping[str, Any] | None,
     *,
@@ -393,6 +462,8 @@ __all__ = [
     "APPROXIMATE_LOCALIZATION_WARNING",
     "CSV_COLUMNS",
     "ExportContext",
+    "JSON_EXPORT_TYPE",
+    "JSON_SCHEMA_VERSION",
     "ReviewedProposalRow",
     "SOURCE_COORDINATE_SYSTEM",
     "build_export_rows",
@@ -400,6 +471,9 @@ __all__ = [
     "build_reviewed_rows",
     "canonical_reviewed_rows",
     "export_proposals_csv",
+    "export_proposals_json",
     "write_csv",
+    "write_json",
     "write_proposals_csv",
+    "write_proposals_json",
 ]
