@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import os
+import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from numbers import Real
@@ -141,6 +142,15 @@ class ReviewedProposalRow:
             "source_coordinate_system": self.source_coordinate_system,
             "localization_warning": self.localization_warning,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ExportBundleResult:
+    """Outcome of one transactional CSV/JSON/PNG export."""
+
+    success: bool
+    paths: tuple[Path, ...]
+    error: str | None = None
 
 
 def build_reviewed_rows(
@@ -362,6 +372,130 @@ def export_proposals_png(
 
 write_proposals_png = export_proposals_png
 write_png = export_proposals_png
+
+
+def export_result_bundle(
+    csv_destination: str | os.PathLike[str],
+    json_destination: str | os.PathLike[str],
+    png_destination: str | os.PathLike[str],
+    source_image: QImage,
+    rows: Iterable[ReviewedProposalRow],
+    *,
+    selected_class: str,
+    confidence_map: np.ndarray | Sequence[Sequence[Real]] | None = None,
+    grid_rects: Iterable[Rect | Sequence[int] | Mapping[str, Any]] = (),
+    overwrite: bool = False,
+) -> ExportBundleResult:
+    """Stage and atomically publish CSV, JSON, and PNG exports.
+
+    The three destinations are checked before any output is touched.  Writers
+    receive temporary paths in the destination directories; publication uses
+    ``os.replace`` and existing files are moved to same-directory backups so a
+    writer or publication failure can restore the previous set in full.
+    """
+
+    destinations = tuple(Path(value) for value in (csv_destination, json_destination, png_destination))
+    duplicate = _duplicate_destination(destinations)
+    if duplicate is not None:
+        return ExportBundleResult(False, (), f"duplicate export destination: {duplicate}")
+    existing = tuple(path for path in destinations if path.exists())
+    if existing and not overwrite:
+        joined = ", ".join(str(path) for path in existing)
+        return ExportBundleResult(False, (), f"refusing to overwrite existing export: {joined}")
+
+    values = tuple(rows)
+    temporary_paths: list[Path] = []
+    publication_records: list[dict[str, Any]] = []
+    try:
+        for destination in destinations:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+
+        csv_stage = _temporary_path(destinations[0], "csv")
+        json_stage = _temporary_path(destinations[1], "json")
+        png_stage = _temporary_path(destinations[2], "png")
+        temporary_paths.extend((csv_stage, json_stage, png_stage))
+        export_proposals_csv(csv_stage, values, overwrite=True)
+        export_proposals_json(json_stage, values, overwrite=True)
+        export_proposals_png(
+            png_stage,
+            source_image,
+            values,
+            selected_class=selected_class,
+            confidence_map=confidence_map,
+            grid_rects=grid_rects,
+            overwrite=True,
+        )
+
+        for stage, destination in zip(temporary_paths, destinations):
+            record: dict[str, Any] = {
+                "destination": destination,
+                "original_exists": destination.exists(),
+                "backup": None,
+            }
+            publication_records.append(record)
+            if record["original_exists"]:
+                backup = _temporary_path(destination, "backup")
+                backup.unlink(missing_ok=True)
+                record["backup"] = backup
+                os.replace(destination, backup)
+            os.replace(stage, destination)
+
+        for record in publication_records:
+            backup = record["backup"]
+            if backup is not None:
+                Path(backup).unlink(missing_ok=True)
+        temporary_paths.clear()
+        return ExportBundleResult(True, destinations, None)
+    except Exception as error:
+        _rollback_publication(publication_records)
+        return ExportBundleResult(False, (), f"export bundle failed: {error}")
+    finally:
+        for temporary in temporary_paths:
+            temporary.unlink(missing_ok=True)
+        for record in publication_records:
+            backup = record["backup"]
+            if backup is not None:
+                Path(backup).unlink(missing_ok=True)
+
+
+def _temporary_path(destination: Path, kind: str) -> Path:
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=f".{kind}.tmp",
+        dir=str(destination.parent),
+    )
+    os.close(descriptor)
+    return Path(name)
+
+
+def _duplicate_destination(destinations: Sequence[Path]) -> str | None:
+    seen: dict[str, Path] = {}
+    for destination in destinations:
+        key = os.path.normcase(os.path.abspath(os.fspath(destination)))
+        if key in seen:
+            return str(destination)
+        seen[key] = destination
+    return None
+
+
+def _rollback_publication(records: Sequence[Mapping[str, Any]]) -> None:
+    for record in reversed(records):
+        destination = Path(record["destination"])
+        backup = record["backup"]
+        original_exists = bool(record["original_exists"])
+        try:
+            if backup is not None:
+                if destination.exists():
+                    destination.unlink()
+                backup_path = Path(backup)
+                if backup_path.exists():
+                    os.replace(backup_path, destination)
+            elif not original_exists and destination.exists():
+                destination.unlink()
+        except OSError:
+            # The primary failure is reported; best-effort rollback must not
+            # hide it or turn a visible failed result into a success.
+            continue
 
 
 def _paint_confidence_map(rendered: QImage, confidence_map: Any) -> None:
@@ -605,6 +739,7 @@ __all__ = [
     "APPROXIMATE_LOCALIZATION_WARNING",
     "CSV_COLUMNS",
     "ExportContext",
+    "ExportBundleResult",
     "JSON_EXPORT_TYPE",
     "JSON_SCHEMA_VERSION",
     "ReviewedProposalRow",
@@ -616,6 +751,7 @@ __all__ = [
     "export_proposals_csv",
     "export_proposals_png",
     "export_proposals_json",
+    "export_result_bundle",
     "write_csv",
     "write_json",
     "write_png",

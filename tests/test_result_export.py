@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PySide6.QtGui import QImage
@@ -16,10 +17,12 @@ from wafer_defect_studio.result_export import (
     CSV_COLUMNS,
     JSON_EXPORT_TYPE,
     JSON_SCHEMA_VERSION,
+    ExportBundleResult,
     build_reviewed_rows,
     export_proposals_csv,
     export_proposals_json,
     export_proposals_png,
+    export_result_bundle,
 )
 
 
@@ -136,6 +139,79 @@ class ResultExportTest(unittest.TestCase):
             self.assertIn("approximate", rendered.text("localization_warning").lower())
             self.assertEqual(rendered.text("source_coordinate_system"), "source-image-pixels")
             self.assertNotEqual(rendered.pixelColor(3, 2), source.pixelColor(3, 2))
+        app.processEvents()
+
+    def test_bundle_publishes_three_unicode_destinations_atomically(self):
+        app = QApplication.instance() or QApplication([])
+        source = QImage(8, 6, QImage.Format_Grayscale8)
+        source.fill(80)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destinations = (
+                root / "輸出" / "結果.csv",
+                root / "輸出" / "結果.json",
+                root / "輸出" / "結果.png",
+            )
+            result = export_result_bundle(
+                *destinations,
+                source,
+                self._reviewed_rows(),
+                selected_class="刮痕",
+            )
+            self.assertIsInstance(result, ExportBundleResult)
+            self.assertTrue(result.success)
+            self.assertEqual(result.paths, destinations)
+            self.assertIsNone(result.error)
+            self.assertTrue(all(path.is_file() for path in destinations))
+        app.processEvents()
+
+    def test_bundle_refuses_existing_destinations_without_overwrite(self):
+        app = QApplication.instance() or QApplication([])
+        source = QImage(8, 6, QImage.Format_Grayscale8)
+        source.fill(80)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destinations = (root / "result.csv", root / "result.json", root / "result.png")
+            sentinel = ("CSV original", "JSON original", "PNG original")
+            for path, content in zip(destinations, sentinel):
+                path.write_text(content, encoding="utf-8")
+            result = export_result_bundle(
+                *destinations,
+                source,
+                self._reviewed_rows(),
+                selected_class="刮痕",
+            )
+            self.assertFalse(result.success)
+            self.assertEqual(result.paths, ())
+            self.assertIsNotNone(result.error)
+            self.assertEqual(
+                [path.read_text(encoding="utf-8") for path in destinations],
+                list(sentinel),
+            )
+        app.processEvents()
+
+    def test_bundle_writer_failure_leaves_no_partial_outputs(self):
+        app = QApplication.instance() or QApplication([])
+        source = QImage(8, 6, QImage.Format_Grayscale8)
+        source.fill(80)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destinations = (root / "result.csv", root / "result.json", root / "result.png")
+            with patch(
+                "wafer_defect_studio.result_export.export_proposals_json",
+                side_effect=OSError("injected JSON failure"),
+            ):
+                result = export_result_bundle(
+                    *destinations,
+                    source,
+                    self._reviewed_rows(),
+                    selected_class="刮痕",
+                )
+            self.assertFalse(result.success)
+            self.assertEqual(result.paths, ())
+            self.assertIn("injected JSON failure", result.error or "")
+            self.assertFalse(any(path.exists() for path in destinations))
+            self.assertEqual(tuple(root.glob(".*")), ())
         app.processEvents()
 
 
