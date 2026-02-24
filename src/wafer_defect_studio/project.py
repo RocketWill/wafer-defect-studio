@@ -21,6 +21,7 @@ _DETECTION_SCHEMA_VERSION = 15
 _PROPOSAL_SCHEMA_VERSION = 16
 _PROPOSAL_REVIEW_SCHEMA_VERSION = 17
 _PROPOSAL_CONVERSION_SCHEMA_VERSION = 18
+_JOB_SCHEMA_VERSION = 19
 _IMAGE_ASSET_SCHEMA_VERSION = 3
 _GRID_PROFILE_SCHEMA_VERSION = 4
 _IMAGE_GRID_PLACEMENT_SCHEMA_VERSION = 5
@@ -43,6 +44,7 @@ _SUPPORTED_SCHEMA_VERSIONS = (
     _PROPOSAL_SCHEMA_VERSION,
     _PROPOSAL_REVIEW_SCHEMA_VERSION,
     _PROPOSAL_CONVERSION_SCHEMA_VERSION,
+    _JOB_SCHEMA_VERSION,
 )
 _DATABASE_NAME = "project.sqlite"
 _PROJECT_DIRECTORIES = ("models", "runs", "exports", "backups", "cache")
@@ -253,6 +255,27 @@ _PROPOSAL_CONVERSIONS_TABLE_SQL = (
     "FOREIGN KEY (image_asset_id) REFERENCES image_assets(image_asset_id)"
     ")"
 )
+_JOBS_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS jobs ("
+    "job_id TEXT NOT NULL PRIMARY KEY, "
+    "kind TEXT NOT NULL CHECK (kind IN ('training', 'evaluation', 'detection')), "
+    "status TEXT NOT NULL CHECK (status IN "
+    "('queued', 'running', 'cancelling', 'completed', 'failed', 'interrupted')), "
+    "attempt INTEGER NOT NULL CHECK (attempt > 0), "
+    "parent_job_id TEXT, "
+    "phase TEXT NOT NULL, "
+    "completed INTEGER NOT NULL CHECK (completed >= 0), "
+    "total INTEGER NOT NULL CHECK (total >= 0 AND completed <= total), "
+    "eta_seconds REAL, "
+    "message TEXT NOT NULL, "
+    "log_path TEXT, "
+    "heartbeat_at TEXT, "
+    "staged_artifact_path TEXT, "
+    "error_code TEXT, "
+    "created_at TEXT NOT NULL, "
+    "updated_at TEXT NOT NULL"
+    ")"
+)
 _IMAGE_ASSET_COLUMNS_V2 = (
     "image_asset_id",
     "path",
@@ -387,6 +410,24 @@ _PROPOSAL_CONVERSION_COLUMNS = (
 )
 # Keep a plural alias for callers that mirror the table name.
 _PROPOSAL_CONVERSIONS_COLUMNS = _PROPOSAL_CONVERSION_COLUMNS
+_JOB_COLUMNS = (
+    "job_id",
+    "kind",
+    "status",
+    "attempt",
+    "parent_job_id",
+    "phase",
+    "completed",
+    "total",
+    "eta_seconds",
+    "message",
+    "log_path",
+    "heartbeat_at",
+    "staged_artifact_path",
+    "error_code",
+    "created_at",
+    "updated_at",
+)
 
 
 class ProjectError(ValueError):
@@ -524,6 +565,7 @@ def open_project(path: str | Path) -> ProjectInfo:
         proposal_conversion_columns = tuple(
             row[1] for row in connection.execute("PRAGMA table_info(proposal_conversions)")
         )
+        job_columns = tuple(row[1] for row in connection.execute("PRAGMA table_info(jobs)"))
     except sqlite3.Error as error:
         raise ProjectError(f"Invalid project database: {database_path}") from error
     finally:
@@ -589,6 +631,8 @@ def open_project(path: str | Path) -> ProjectInfo:
     if pragma_version >= _PROPOSAL_CONVERSION_SCHEMA_VERSION:
         if proposal_conversion_columns != _PROPOSAL_CONVERSION_COLUMNS:
             raise ProjectError(f"Invalid Proposal Conversion table: {database_path}")
+    if pragma_version >= _JOB_SCHEMA_VERSION and job_columns != _JOB_COLUMNS:
+        raise ProjectError(f"Invalid Job table: {database_path}")
 
     return ProjectInfo(project_id, pragma_version, project_path)
 
