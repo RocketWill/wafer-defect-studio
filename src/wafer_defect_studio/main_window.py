@@ -47,6 +47,7 @@ from .evaluation_controls import DecisionService, EvaluationControls
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
+from .export_controls import ExportCallback, ResultExportControls
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -411,6 +412,16 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._proposal_conversion_dock)
         self._proposal_conversion_dock.setEnabled(False)
         self._proposal_conversion_dock.hide()
+        self._result_export_controls = ResultExportControls()
+        self._result_export_dock = QDockWidget("Result Export", self)
+        self._result_export_dock.setObjectName("resultExportDock")
+        self._result_export_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._result_export_dock.setWidget(self._result_export_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._result_export_dock)
+        self._result_export_dock.setEnabled(False)
+        self._result_export_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
@@ -559,6 +570,29 @@ class MainWindow(QMainWindow):
         self._proposal_conversion_controls.configure(preview, confirmation_callback)
         self._proposal_conversion_dock.setEnabled(True)
         self._proposal_conversion_dock.show()
+
+    def configure_result_export(
+        self,
+        source_image,
+        rows,
+        selected_class: str,
+        *,
+        confidence_map=None,
+        grid_rects=(),
+        export_callback: ExportCallback | None = None,
+    ) -> None:
+        """Show explicit CSV/JSON/PNG destinations with an injected callback."""
+
+        self._result_export_controls.configure(
+            source_image,
+            rows,
+            selected_class,
+            confidence_map=confidence_map,
+            grid_rects=grid_rects,
+            export_callback=export_callback,
+        )
+        self._result_export_dock.setEnabled(True)
+        self._result_export_dock.show()
 
     def start_detection(self) -> None:
         """Start the configured Detection worker without blocking the GUI."""
