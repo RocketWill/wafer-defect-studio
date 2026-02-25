@@ -48,6 +48,7 @@ from .detection_controls import DetectionControls, DetectionLauncher, DetectionR
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .export_controls import ExportCallback, ResultExportControls
+from .job_controls import JobsActionCallback, JobsControls
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -422,6 +423,16 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._result_export_dock)
         self._result_export_dock.setEnabled(False)
         self._result_export_dock.hide()
+        self._jobs_controls = JobsControls()
+        self._jobs_dock = QDockWidget("Jobs", self)
+        self._jobs_dock.setObjectName("jobsDock")
+        self._jobs_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._jobs_dock.setWidget(self._jobs_controls)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._jobs_dock)
+        self._jobs_dock.setEnabled(False)
+        self._jobs_dock.hide()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
@@ -593,6 +604,13 @@ class MainWindow(QMainWindow):
         )
         self._result_export_dock.setEnabled(True)
         self._result_export_dock.show()
+
+    def configure_jobs(self, jobs, action_callback: JobsActionCallback | None = None) -> None:
+        """Show immutable Job snapshots with an injected nonmodal action seam."""
+
+        self._jobs_controls.configure(jobs, action_callback=action_callback)
+        self._jobs_dock.setEnabled(True)
+        self._jobs_dock.show()
 
     def start_detection(self) -> None:
         """Start the configured Detection worker without blocking the GUI."""
