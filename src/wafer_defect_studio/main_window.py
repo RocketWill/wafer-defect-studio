@@ -49,6 +49,8 @@ from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .export_controls import ExportCallback, ResultExportControls
 from .job_controls import JobsActionCallback, JobsControls
+from .job_recovery import recover_stale_jobs
+from .job_store import list_jobs
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -611,6 +613,33 @@ class MainWindow(QMainWindow):
         self._jobs_controls.configure(jobs, action_callback=action_callback)
         self._jobs_dock.setEnabled(True)
         self._jobs_dock.show()
+
+    def configure_jobs_for_project(
+        self,
+        project_path,
+        *,
+        now,
+        stale_after_seconds: int | float = 60,
+        process_is_alive=None,
+        action_callback: JobsActionCallback | None = None,
+    ) -> None:
+        """Recover stale persisted jobs before presenting the nonmodal panel."""
+
+        try:
+            recover_stale_jobs(
+                project_path,
+                now=now,
+                stale_after_seconds=stale_after_seconds,
+                process_is_alive=process_is_alive,
+            )
+            jobs = list_jobs(project_path)
+        except Exception as error:
+            self._jobs_controls.configure((), action_callback=action_callback)
+            self._jobs_controls.status_label.setText(f"Jobs recovery failed: {error}")
+            self._jobs_dock.setEnabled(True)
+            self._jobs_dock.show()
+            return
+        self.configure_jobs(jobs, action_callback=action_callback)
 
     def start_detection(self) -> None:
         """Start the configured Detection worker without blocking the GUI."""
