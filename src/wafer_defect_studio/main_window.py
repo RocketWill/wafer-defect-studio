@@ -51,6 +51,7 @@ from .export_controls import ExportCallback, ResultExportControls
 from .job_controls import JobsActionCallback, JobsControls
 from .job_recovery import recover_stale_jobs
 from .job_store import list_jobs
+from .accessibility_audit import ensure_accessible_labels
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -435,6 +436,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._jobs_dock)
         self._jobs_dock.setEnabled(False)
         self._jobs_dock.hide()
+        ensure_accessible_labels(self)
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
