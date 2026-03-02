@@ -52,6 +52,7 @@ from .job_controls import JobsActionCallback, JobsControls
 from .job_recovery import recover_stale_jobs
 from .job_store import list_jobs
 from .accessibility_audit import ensure_accessible_labels
+from .ui_theme import ThemeMode, apply_theme
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -437,6 +438,7 @@ class MainWindow(QMainWindow):
         self._jobs_dock.setEnabled(False)
         self._jobs_dock.hide()
         ensure_accessible_labels(self)
+        apply_theme(self, ThemeMode.SYSTEM)
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
