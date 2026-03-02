@@ -28,6 +28,22 @@ class ApplicationSmokeTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(len(shown_windows), 1)
 
+    def test_main_reuses_existing_application_instance(self):
+        existing = QApplication.instance() or QApplication([])
+        seen = []
+
+        def fake_exec(app):
+            seen.append(app)
+            for widget in tuple(app.topLevelWidgets()):
+                widget.close()
+            return 0
+
+        with patch.object(QApplication, "exec", new=fake_exec):
+            result = application.main([])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(seen, [existing])
+
 
 if __name__ == "__main__":
     unittest.main()
