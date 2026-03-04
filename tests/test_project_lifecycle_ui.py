@@ -1,4 +1,5 @@
 import os
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -6,8 +7,10 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QFileDialog
 
+from wafer_defect_studio import image_asset
 from wafer_defect_studio.main_window import MainWindow
 from wafer_defect_studio.project import create_project, open_project
 
@@ -120,6 +123,110 @@ class ProjectLifecycleUiTest(unittest.TestCase):
                 self.assertEqual(window.windowTitle(), title_after_open)
         finally:
             window.close()
+
+    def test_import_wafer_image_action_registers_and_displays_native_source(self):
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.show()
+        app.processEvents()
+        try:
+            file_menu = next(
+                action.menu()
+                for action in window.menuBar().actions()
+                if action.text() == "File" and action.menu() is not None
+            )
+            create_action = next(
+                action
+                for action in file_menu.actions()
+                if action.objectName() == "createProjectAction"
+            )
+            import_action = next(
+                action
+                for action in file_menu.actions()
+                if action.objectName() == "importWaferImageAction"
+            )
+            self.assertFalse(import_action.isEnabled())
+
+            with TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                project_path = root / "project"
+                project_path.mkdir()
+                source_path = root / "wafer.png"
+                _write_grayscale_png(source_path, width=4, height=3, value=37)
+                source_before = source_path.read_bytes()
+
+                with patch.object(
+                    QFileDialog,
+                    "getExistingDirectory",
+                    return_value=str(project_path),
+                ):
+                    create_action.trigger()
+                self.assertTrue(import_action.isEnabled())
+
+                with patch.object(
+                    QFileDialog,
+                    "getOpenFileName",
+                    return_value=(str(source_path), "PNG"),
+                ):
+                    import_action.trigger()
+
+                deadline = time.monotonic() + 3
+                while (
+                    window.statusBar().currentMessage() != "Ready"
+                    and time.monotonic() < deadline
+                ):
+                    app.processEvents()
+                    time.sleep(0.01)
+                self.assertEqual(window.statusBar().currentMessage(), "Ready")
+
+                asset = window.current_image_asset
+                loaded = window.loaded_wafer_image
+                self.assertIsNotNone(asset)
+                self.assertIsNotNone(loaded)
+                self.assertEqual(asset.path, source_path.resolve())
+                self.assertEqual((asset.width, asset.height, asset.dtype), (4, 3, "uint8"))
+                self.assertEqual((loaded.width, loaded.height, loaded.dtype), (4, 3, "uint8"))
+                self.assertEqual(loaded.pixels.typecode, "B")
+                self.assertEqual(list(loaded.pixels), [37] * 12)
+                self.assertEqual(source_path.read_bytes(), source_before)
+                self.assertEqual(image_asset.load_image_assets(project_path)[0].asset, asset)
+
+                previous_asset = asset
+                previous_loaded = loaded
+                with patch.object(QFileDialog, "getOpenFileName", return_value=("", "")):
+                    import_action.trigger()
+                self.assertEqual(window.current_image_asset, previous_asset)
+                self.assertEqual(window.loaded_wafer_image, previous_loaded)
+
+                color_path = root / "color.png"
+                _write_color_png(color_path)
+                with patch.object(
+                    QFileDialog,
+                    "getOpenFileName",
+                    return_value=(str(color_path), "PNG"),
+                ):
+                    import_action.trigger()
+                self.assertEqual(window.current_image_asset, previous_asset)
+                self.assertEqual(window.loaded_wafer_image, previous_loaded)
+                self.assertEqual(source_path.read_bytes(), source_before)
+        finally:
+            window.close()
+
+
+def _write_grayscale_png(path: Path, *, width: int, height: int, value: int) -> None:
+    image = QImage(width, height, QImage.Format_Grayscale8)
+    image.fill(value)
+    if not image.save(str(path), "PNG"):
+        raise AssertionError(f"Unable to write grayscale source: {path}")
+    del image
+
+
+def _write_color_png(path: Path) -> None:
+    image = QImage(4, 3, QImage.Format_RGB32)
+    image.fill(0xFF112233)
+    if not image.save(str(path), "PNG"):
+        raise AssertionError(f"Unable to write color source: {path}")
+    del image
 
 
 if __name__ == "__main__":

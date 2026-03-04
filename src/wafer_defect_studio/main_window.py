@@ -54,6 +54,7 @@ from .job_controls import JobsActionCallback, JobsControls
 from .job_recovery import recover_stale_jobs
 from .job_store import list_jobs
 from .accessibility_audit import ensure_accessible_labels
+from . import image_asset
 from . import project
 from .ui_theme import ThemeMode, apply_theme
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
@@ -279,6 +280,11 @@ class MainWindow(QMainWindow):
         self.open_project_action.setObjectName("openProjectAction")
         self.open_project_action.triggered.connect(self._open_project)
         file_menu.addAction(self.open_project_action)
+        self.import_wafer_image_action = QAction("Import Wafer Image…", self)
+        self.import_wafer_image_action.setObjectName("importWaferImageAction")
+        self.import_wafer_image_action.setEnabled(False)
+        self.import_wafer_image_action.triggered.connect(self._import_wafer_image)
+        file_menu.addAction(self.import_wafer_image_action)
         self._loaded_wafer_image: LoadedWaferImage | None = None
         self._image_view = WaferView()
         self.setCentralWidget(self._image_view)
@@ -459,6 +465,18 @@ class MainWindow(QMainWindow):
 
         return self._active_project_path
 
+    @property
+    def current_image_asset(self) -> ImageAsset | None:
+        """Return the currently displayed registered image asset, if any."""
+
+        return self._current_image_asset
+
+    @property
+    def loaded_wafer_image(self) -> LoadedWaferImage | None:
+        """Return the currently displayed native image metadata, if any."""
+
+        return self._loaded_wafer_image
+
     def _create_project(self) -> None:
         selected_path = QFileDialog.getExistingDirectory(self, "Create Project")
         if not selected_path:
@@ -469,6 +487,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Create Project failed: {error}")
             return
         self._active_project_path = project_info.path
+        self.import_wafer_image_action.setEnabled(True)
         self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
         self.statusBar().showMessage(f"Project created: {project_info.path}")
 
@@ -482,8 +501,28 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Open Project failed: {error}")
             return
         self._active_project_path = project_info.path
+        self.import_wafer_image_action.setEnabled(True)
         self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
         self.statusBar().showMessage(f"Project opened: {project_info.path}")
+
+    def _import_wafer_image(self) -> None:
+        if self._active_project_path is None:
+            return
+        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Import Wafer Image",
+        )
+        if not selected_path:
+            return
+        try:
+            asset = image_asset.register_wafer_image(
+                self._active_project_path,
+                selected_path,
+            )
+        except Exception as error:
+            self.statusBar().showMessage(f"Import Wafer Image failed: {error}")
+            return
+        self.load_wafer_image(asset)
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
