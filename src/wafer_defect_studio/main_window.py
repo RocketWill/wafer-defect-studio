@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QDockWidget,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -52,6 +54,7 @@ from .job_controls import JobsActionCallback, JobsControls
 from .job_recovery import recover_stale_jobs
 from .job_store import list_jobs
 from .accessibility_audit import ensure_accessible_labels
+from . import project
 from .ui_theme import ThemeMode, apply_theme
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .wafer_loader import WaferLoader
@@ -266,6 +269,12 @@ class MainWindow(QMainWindow):
     def __init__(self, parent: QMainWindow | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Wafer Defect Studio")
+        self._active_project_path: Path | None = None
+        file_menu = self.menuBar().addMenu("File")
+        self.create_project_action = QAction("Create Project…", self)
+        self.create_project_action.setObjectName("createProjectAction")
+        self.create_project_action.triggered.connect(self._create_project)
+        file_menu.addAction(self.create_project_action)
         self._loaded_wafer_image: LoadedWaferImage | None = None
         self._image_view = WaferView()
         self.setCentralWidget(self._image_view)
@@ -439,6 +448,25 @@ class MainWindow(QMainWindow):
         self._jobs_dock.hide()
         ensure_accessible_labels(self)
         apply_theme(self, ThemeMode.SYSTEM)
+
+    @property
+    def active_project_path(self) -> Path | None:
+        """Return the currently active project path, if one is open."""
+
+        return self._active_project_path
+
+    def _create_project(self) -> None:
+        selected_path = QFileDialog.getExistingDirectory(self, "Create Project")
+        if not selected_path:
+            return
+        try:
+            project_info = project.create_project(selected_path)
+        except Exception as error:
+            self.statusBar().showMessage(f"Create Project failed: {error}")
+            return
+        self._active_project_path = project_info.path
+        self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
+        self.statusBar().showMessage(f"Project created: {project_info.path}")
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
