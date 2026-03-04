@@ -275,6 +275,10 @@ class MainWindow(QMainWindow):
         self.create_project_action.setObjectName("createProjectAction")
         self.create_project_action.triggered.connect(self._create_project)
         file_menu.addAction(self.create_project_action)
+        self.open_project_action = QAction("Open Project…", self)
+        self.open_project_action.setObjectName("openProjectAction")
+        self.open_project_action.triggered.connect(self._open_project)
+        file_menu.addAction(self.open_project_action)
         self._loaded_wafer_image: LoadedWaferImage | None = None
         self._image_view = WaferView()
         self.setCentralWidget(self._image_view)
@@ -467,6 +471,19 @@ class MainWindow(QMainWindow):
         self._active_project_path = project_info.path
         self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
         self.statusBar().showMessage(f"Project created: {project_info.path}")
+
+    def _open_project(self) -> None:
+        selected_path = QFileDialog.getExistingDirectory(self, "Open Project")
+        if not selected_path:
+            return
+        try:
+            project_info = project.open_project(selected_path)
+        except Exception as error:
+            self.statusBar().showMessage(f"Open Project failed: {error}")
+            return
+        self._active_project_path = project_info.path
+        self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
+        self.statusBar().showMessage(f"Project opened: {project_info.path}")
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
