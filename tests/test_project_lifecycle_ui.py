@@ -7,8 +7,9 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QListWidget
 
 from wafer_defect_studio import image_asset
 from wafer_defect_studio.main_window import MainWindow
@@ -211,6 +212,99 @@ class ProjectLifecycleUiTest(unittest.TestCase):
                 self.assertEqual(source_path.read_bytes(), source_before)
         finally:
             window.close()
+
+    def test_project_hub_persists_recent_projects_and_opens_valid_entries(self):
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
+            settings.clear()
+            settings.sync()
+
+            project_path = root / "project"
+            project_path.mkdir()
+            target_path = root / "target-project"
+            target_path.mkdir()
+            create_project(target_path)
+
+            window = MainWindow(settings=settings)
+            window.show()
+            app.processEvents()
+            try:
+                central_widget = window.centralWidget()
+                hub = window.findChild(QListWidget, "projectHubList")
+                self.assertIsNotNone(hub)
+                self.assertTrue(hub.isVisible())
+
+                file_menu = next(
+                    action.menu()
+                    for action in window.menuBar().actions()
+                    if action.text() == "File" and action.menu() is not None
+                )
+                create_action = next(
+                    action
+                    for action in file_menu.actions()
+                    if action.objectName() == "createProjectAction"
+                )
+                open_action = next(
+                    action
+                    for action in file_menu.actions()
+                    if action.objectName() == "openProjectAction"
+                )
+
+                with patch.object(
+                    QFileDialog,
+                    "getExistingDirectory",
+                    return_value=str(project_path),
+                ):
+                    create_action.trigger()
+                with patch.object(
+                    QFileDialog,
+                    "getExistingDirectory",
+                    return_value=str(target_path),
+                ):
+                    open_action.trigger()
+                with patch.object(
+                    QFileDialog,
+                    "getExistingDirectory",
+                    return_value=str(target_path),
+                ):
+                    open_action.trigger()
+
+                self.assertIs(window.centralWidget(), central_widget)
+                self.assertEqual(hub.count(), 2)
+                self.assertEqual(hub.item(0).text(), str(target_path.resolve()))
+
+                window.close()
+                app.processEvents()
+                fresh_window = MainWindow(settings=settings)
+                fresh_window.show()
+                app.processEvents()
+                try:
+                    fresh_hub = fresh_window.findChild(QListWidget, "projectHubList")
+                    self.assertIsNotNone(fresh_hub)
+                    self.assertTrue(fresh_hub.isVisible())
+                    self.assertEqual(fresh_hub.count(), 2)
+                    self.assertEqual(fresh_hub.item(0).text(), str(target_path.resolve()))
+
+                    valid_item = fresh_hub.item(0)
+                    fresh_hub.itemActivated.emit(valid_item)
+                    self.assertEqual(fresh_window.active_project_path, target_path.resolve())
+                    self.assertIn(target_path.name, fresh_window.windowTitle())
+
+                    active_path = fresh_window.active_project_path
+                    active_title = fresh_window.windowTitle()
+                    invalid_path = root / "invalid-project"
+                    invalid_path.mkdir()
+                    fresh_hub.insertItem(0, str(invalid_path))
+                    fresh_hub.itemActivated.emit(fresh_hub.item(0))
+                    self.assertEqual(fresh_window.active_project_path, active_path)
+                    self.assertEqual(fresh_window.windowTitle(), active_title)
+                finally:
+                    fresh_window.close()
+            finally:
+                if not window.isHidden():
+                    window.close()
 
 
 def _write_grayscale_png(path: Path, *, width: int, height: int, value: int) -> None:

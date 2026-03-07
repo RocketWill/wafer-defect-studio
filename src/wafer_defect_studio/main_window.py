@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, QSettings, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QPushButton,
     QSpinBox,
@@ -267,9 +269,21 @@ class _AutosaveFailureControls(QWidget):
 class MainWindow(QMainWindow):
     """Top-level window for Wafer Defect Studio."""
 
-    def __init__(self, parent: QMainWindow | None = None) -> None:
+    _RECENT_PROJECTS_KEY = "recentProjects"
+
+    def __init__(
+        self,
+        parent: QMainWindow | None = None,
+        *,
+        settings: QSettings | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Wafer Defect Studio")
+        self._settings = (
+            settings
+            if settings is not None
+            else QSettings("WaferDefectStudio", "WaferDefectStudio")
+        )
         self._active_project_path: Path | None = None
         file_menu = self.menuBar().addMenu("File")
         self.create_project_action = QAction("Create Project…", self)
@@ -288,6 +302,18 @@ class MainWindow(QMainWindow):
         self._loaded_wafer_image: LoadedWaferImage | None = None
         self._image_view = WaferView()
         self.setCentralWidget(self._image_view)
+        self.project_hub_list = QListWidget(self)
+        self.project_hub_list.setObjectName("projectHubList")
+        self.project_hub_list.itemActivated.connect(self._open_recent_project)
+        self._project_hub_dock = QDockWidget("Project Hub", self)
+        self._project_hub_dock.setObjectName("projectHubDock")
+        self._project_hub_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._project_hub_dock.setWidget(self.project_hub_list)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._project_hub_dock)
+        self._project_hub_dock.show()
+        self._refresh_project_hub()
         self._annotation_controls = _AnnotationToolControls()
         self._annotation_controls.modeChanged.connect(self._image_view.set_tool_mode)
         self._annotation_controls.classSelectionChanged.connect(
@@ -477,6 +503,39 @@ class MainWindow(QMainWindow):
 
         return self._loaded_wafer_image
 
+    def _recent_project_paths(self) -> list[str]:
+        value = self._settings.value(self._RECENT_PROJECTS_KEY, [])
+        if isinstance(value, str):
+            value = [value]
+        if not value:
+            return []
+        return [str(path) for path in value if str(path)][:10]
+
+    def _refresh_project_hub(self) -> None:
+        self.project_hub_list.clear()
+        for project_path in self._recent_project_paths():
+            item = QListWidgetItem(project_path, self.project_hub_list)
+            item.setData(Qt.ItemDataRole.UserRole, project_path)
+
+    def _remember_recent_project(self, project_path: str | Path) -> None:
+        resolved_path = str(Path(project_path).expanduser().resolve())
+        recent_paths = [
+            candidate
+            for candidate in self._recent_project_paths()
+            if candidate != resolved_path
+        ]
+        recent_paths.insert(0, resolved_path)
+        self._settings.setValue(self._RECENT_PROJECTS_KEY, recent_paths[:10])
+        self._settings.sync()
+        self._refresh_project_hub()
+
+    def _activate_project(self, project_info, status: str) -> None:
+        self._active_project_path = project_info.path
+        self.import_wafer_image_action.setEnabled(True)
+        self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
+        self.statusBar().showMessage(f"{status}: {project_info.path}")
+        self._remember_recent_project(project_info.path)
+
     def _create_project(self) -> None:
         selected_path = QFileDialog.getExistingDirectory(self, "Create Project")
         if not selected_path:
@@ -486,10 +545,7 @@ class MainWindow(QMainWindow):
         except Exception as error:
             self.statusBar().showMessage(f"Create Project failed: {error}")
             return
-        self._active_project_path = project_info.path
-        self.import_wafer_image_action.setEnabled(True)
-        self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
-        self.statusBar().showMessage(f"Project created: {project_info.path}")
+        self._activate_project(project_info, "Project created")
 
     def _open_project(self) -> None:
         selected_path = QFileDialog.getExistingDirectory(self, "Open Project")
@@ -500,10 +556,16 @@ class MainWindow(QMainWindow):
         except Exception as error:
             self.statusBar().showMessage(f"Open Project failed: {error}")
             return
-        self._active_project_path = project_info.path
-        self.import_wafer_image_action.setEnabled(True)
-        self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
-        self.statusBar().showMessage(f"Project opened: {project_info.path}")
+        self._activate_project(project_info, "Project opened")
+
+    def _open_recent_project(self, item: QListWidgetItem) -> None:
+        selected_path = item.data(Qt.ItemDataRole.UserRole) or item.text()
+        try:
+            project_info = project.open_project(selected_path)
+        except Exception as error:
+            self.statusBar().showMessage(f"Open Project failed: {error}")
+            return
+        self._activate_project(project_info, "Project opened")
 
     def _import_wafer_image(self) -> None:
         if self._active_project_path is None:
