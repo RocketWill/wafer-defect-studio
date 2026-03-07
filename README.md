@@ -8,7 +8,7 @@ A Windows desktop MVP for source-pixel-aligned wafer grid classification. It kee
 
 ## Current status
 
-The domain services and feature controls for tickets 01–11 are implemented and covered by 86 automated tests. The default executable currently opens the editor shell, but does **not** yet expose the complete Project Hub / Create / Open / Import workflow. Until that wiring is added, several workflows are primarily exercised through service APIs, configured controls, and tests rather than a turnkey end-user path.
+The domain services and feature controls for tickets 01–12 are implemented. The desktop shell now exposes Create Project, Open Project, referenced Wafer Image import, and a persistent Project Hub with recent-project source health. Training, evaluation, and detection controls still rely on prepared service configuration rather than one fully connected end-user workflow.
 
 ## Capabilities
 
@@ -57,7 +57,7 @@ The maintained local environment used for the latest validation reported Python 
 wafer-defect-studio
 ```
 
-This currently launches the editor shell. Project creation/open/import still needs a user-facing top-level workflow before the application is a complete daily-use desktop path.
+This launches the editor shell and Project Hub. Use the File menu to create or open a project and import a referenced Wafer Image.
 
 ## Validate
 
@@ -90,7 +90,6 @@ docs/agents/               Domain and delivery rules
 
 ## Known gaps found in the repository review
 
-- The Project Hub and File/Create/Open/Import UI required by the product spec are not connected to the default application entry point.
 - The MVP smoke called “end-to-end” validates the service pipeline, but does not drive the GUI workflow.
 - completed Training Runs may persist an empty environment record instead of automatically capturing Python, PyTorch, torchvision, CUDA/driver, OS, and package versions.
 - Runtime imports include NumPy, PyTorch, and torchvision, but `pyproject.toml` does not declare them.

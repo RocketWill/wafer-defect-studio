@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication, QFileDialog, QListWidget
+from PySide6.QtWidgets import QApplication, QDockWidget, QFileDialog, QListWidget
 
 from wafer_defect_studio import image_asset
 from wafer_defect_studio.main_window import MainWindow
@@ -179,6 +179,9 @@ class ProjectLifecycleUiTest(unittest.TestCase):
                     app.processEvents()
                     time.sleep(0.01)
                 self.assertEqual(window.statusBar().currentMessage(), "Ready")
+                project_hub_dock = window.findChild(QDockWidget, "projectHubDock")
+                self.assertIsNotNone(project_hub_dock)
+                self.assertFalse(project_hub_dock.isVisible())
 
                 asset = window.current_image_asset
                 loaded = window.loaded_wafer_image
@@ -273,7 +276,7 @@ class ProjectLifecycleUiTest(unittest.TestCase):
 
                 self.assertIs(window.centralWidget(), central_widget)
                 self.assertEqual(hub.count(), 2)
-                self.assertEqual(hub.item(0).text(), str(target_path.resolve()))
+                self.assertIn(str(target_path.resolve()), hub.item(0).text())
 
                 window.close()
                 app.processEvents()
@@ -285,7 +288,7 @@ class ProjectLifecycleUiTest(unittest.TestCase):
                     self.assertIsNotNone(fresh_hub)
                     self.assertTrue(fresh_hub.isVisible())
                     self.assertEqual(fresh_hub.count(), 2)
-                    self.assertEqual(fresh_hub.item(0).text(), str(target_path.resolve()))
+                    self.assertIn(str(target_path.resolve()), fresh_hub.item(0).text())
 
                     valid_item = fresh_hub.item(0)
                     fresh_hub.itemActivated.emit(valid_item)
@@ -305,6 +308,88 @@ class ProjectLifecycleUiTest(unittest.TestCase):
             finally:
                 if not window.isHidden():
                     window.close()
+
+    def test_project_hub_displays_source_health_without_mutating_sources(self):
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            available_path = root / "available-project"
+            available_path.mkdir()
+            create_project(available_path)
+            available_source = root / "available.png"
+            _write_grayscale_png(available_source, width=2, height=2, value=37)
+            available_before = available_source.read_bytes()
+            available_asset = image_asset.register_wafer_image(available_path, available_source)
+
+            missing_path = root / "missing-project"
+            missing_path.mkdir()
+            create_project(missing_path)
+            missing_source = root / "missing.png"
+            _write_grayscale_png(missing_source, width=2, height=2, value=41)
+            image_asset.register_wafer_image(missing_path, missing_source)
+            missing_source.unlink()
+
+            changed_path = root / "changed-project"
+            changed_path.mkdir()
+            create_project(changed_path)
+            changed_source = root / "changed.png"
+            _write_grayscale_png(changed_source, width=2, height=2, value=43)
+            image_asset.register_wafer_image(changed_path, changed_source)
+            changed_source.write_bytes(b"changed source bytes")
+
+            empty_path = root / "empty-project"
+            empty_path.mkdir()
+            create_project(empty_path)
+
+            invalid_path = root / "invalid-project"
+            invalid_path.mkdir()
+            settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
+            settings.setValue(
+                "recentProjects",
+                [
+                    str(invalid_path),
+                    str(empty_path),
+                    str(changed_path),
+                    str(missing_path),
+                    str(available_path),
+                ],
+            )
+            settings.sync()
+
+            window = MainWindow(settings=settings)
+            window.show()
+            app.processEvents()
+            try:
+                hub = window.findChild(QListWidget, "projectHubList")
+                self.assertIsNotNone(hub)
+                items = {
+                    item.data(Qt.ItemDataRole.UserRole): item.text()
+                    for item in (hub.item(index) for index in range(hub.count()))
+                }
+                expected_statuses = {
+                    invalid_path: "Project Unavailable",
+                    empty_path: "No Wafer Images",
+                    changed_path: "Changed Source",
+                    missing_path: "Missing Source",
+                    available_path: "Available",
+                }
+                for project_path, status in expected_statuses.items():
+                    display = items[str(project_path.resolve())]
+                    self.assertIn(str(project_path.resolve()), display)
+                    self.assertIn(status, display)
+
+                self.assertEqual(available_source.read_bytes(), available_before)
+                self.assertEqual(
+                    image_asset.load_image_assets(available_path)[0].asset.fingerprint,
+                    available_asset.fingerprint,
+                )
+
+                self.assertIsNone(window.active_project_path)
+                hub.itemActivated.emit(hub.item(0))
+                self.assertIsNone(window.active_project_path)
+                self.assertIn("Project Unavailable", hub.item(0).text())
+            finally:
+                window.close()
 
 
 def _write_grayscale_png(path: Path, *, width: int, height: int, value: int) -> None:

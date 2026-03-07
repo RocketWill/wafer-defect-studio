@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QSettings, Qt, Signal
+from PySide6.QtCore import QPoint, QSettings, QTimer, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -514,8 +514,23 @@ class MainWindow(QMainWindow):
     def _refresh_project_hub(self) -> None:
         self.project_hub_list.clear()
         for project_path in self._recent_project_paths():
-            item = QListWidgetItem(project_path, self.project_hub_list)
+            status = self._project_source_health(project_path)
+            item = QListWidgetItem(f"{project_path} — {status}", self.project_hub_list)
             item.setData(Qt.ItemDataRole.UserRole, project_path)
+
+    @staticmethod
+    def _project_source_health(project_path: str | Path) -> str:
+        try:
+            assets = image_asset.load_image_assets(project_path)
+        except Exception:
+            return "Project Unavailable"
+        if not assets:
+            return "No Wafer Images"
+        if any(reopened.source_health is SourceHealth.MISSING for reopened in assets):
+            return "Missing Source"
+        if any(reopened.source_health is SourceHealth.CHANGED for reopened in assets):
+            return "Changed Source"
+        return "Available"
 
     def _remember_recent_project(self, project_path: str | Path) -> None:
         resolved_path = str(Path(project_path).expanduser().resolve())
@@ -585,15 +600,18 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Import Wafer Image failed: {error}")
             return
         self.load_wafer_image(asset)
+        self._refresh_project_hub()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
         """Decode *asset*, retain native pixels, and show one fitted pixmap."""
 
         self._latest_load_token += 1
         loaded, image = _decode_wafer_image(asset.path)
+        self._project_hub_dock.hide()
         self._loaded_wafer_image = loaded
         self._image_view._set_loaded_image(loaded, image)
         self._set_current_image_asset(asset)
+        QTimer.singleShot(0, self._image_view._fit_image)
         return loaded
 
     def set_grid_profile(self, project_path: str | Path, profile: GridProfile) -> None:
@@ -1127,10 +1145,12 @@ class MainWindow(QMainWindow):
         asset = self._pending_image_assets.pop(token, None)
         if token != self._latest_load_token:
             return
+        self._project_hub_dock.hide()
         self._loaded_wafer_image = loaded
         self._image_view._set_loaded_image(loaded, image)
         if asset is not None:
             self._set_current_image_asset(asset)
+        QTimer.singleShot(0, self._image_view._fit_image)
         ready_status = "Ready - Lossy JPEG Source" if self._latest_lossy_source else "Ready"
         self.statusBar().showMessage(ready_status)
 
