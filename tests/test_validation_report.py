@@ -1,3 +1,4 @@
+from pathlib import Path
 import unittest
 
 from wafer_defect_studio.validation_report import (
@@ -37,6 +38,26 @@ class ValidationReportTest(unittest.TestCase):
         self.assertIn("approximate heatmap only", markdown)
         self.assertIn("## Known limitations", markdown)
         self.assertNotIn("pixel-accurate localization", markdown)
+
+    def test_published_report_distinguishes_gui_and_service_evidence(self):
+        report_path = (
+            Path(__file__).resolve().parents[1]
+            / ".scratch"
+            / "wafer-defect-classification"
+            / "mvp-validation-report.md"
+        )
+        markdown = report_path.read_text(encoding="utf-8")
+        self.assertIn("### GUI-driven smoke validation", markdown)
+        self.assertIn("### Service-pipeline validation", markdown)
+        for command in (
+            "tests.test_gui_validation_smoke.GuiValidationSmokeTest.test_file_actions_create_import_and_display_wafer_image",
+            "tests.test_gui_validation_smoke.GuiValidationSmokeTest.test_grid_profile_origin_and_area_controls_persist_through_visible_actions",
+            "tests.test_gui_validation_smoke.GuiValidationSmokeTest.test_annotation_and_review_controls_persist_visible_multilabel_workflow",
+        ):
+            self.assertIn(command, markdown)
+        lowered = markdown.lower()
+        self.assertNotIn("service-only smoke", lowered)
+        self.assertNotIn("complete end-to-end", lowered)
 
 
 if __name__ == "__main__":
