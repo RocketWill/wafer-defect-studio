@@ -7,16 +7,31 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QPointF, QSettings, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QPushButton, QSpinBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QFileDialog,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+)
 
 from wafer_defect_studio import image_asset, project
-from wafer_defect_studio.effective_area import load_effective_wafer_area, set_effective_ellipse
+from wafer_defect_studio.annotation import load_grid_annotation
+from wafer_defect_studio.defect_class import DefectClass, save_defect_classes
+from wafer_defect_studio.effective_area import (
+    confirm_effective_wafer_area,
+    load_effective_wafer_area,
+    set_effective_ellipse,
+)
 from wafer_defect_studio.grid_profile import load_grid_profiles, save_grid_profile
 from wafer_defect_studio.image_grid_placement import load_image_grid_placement, set_image_grid_origin
 from wafer_defect_studio.main_window import MainWindow
+from wafer_defect_studio.review import load_review_state
+from wafer_defect_studio.review_counts import load_review_counts
 
 
 class GuiValidationSmokeTest(unittest.TestCase):
@@ -184,6 +199,126 @@ class GuiValidationSmokeTest(unittest.TestCase):
                 self.assertEqual(confirmation_label.text(), "Confirmed")
                 self.assertFalse(confirm_area.isEnabled())
                 self.assertEqual(participating_label.text(), "Participating: 4")
+            finally:
+                window.close()
+                window.deleteLater()
+                app.processEvents()
+
+    def test_annotation_and_review_controls_persist_visible_multilabel_workflow(self):
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            project_path = root / "gui-project"
+            project.create_project(project_path)
+            source_path = root / "wafer.png"
+            _write_grayscale_png(source_path, width=32, height=24, value=80)
+            asset = image_asset.register_wafer_image(project_path, source_path)
+            profile = save_grid_profile(project_path, 16, 12)
+            set_image_grid_origin(
+                project_path,
+                asset.image_asset_id,
+                profile.grid_profile_id,
+                0,
+                0,
+            )
+            set_effective_ellipse(
+                project_path,
+                asset.image_asset_id,
+                16,
+                12,
+                16,
+                12,
+            )
+            confirmed_area = confirm_effective_wafer_area(
+                project_path,
+                asset.image_asset_id,
+            )
+            save_defect_classes(
+                project_path,
+                (
+                    DefectClass("scratch", "Scratch", "#cc4444", order=0),
+                    DefectClass("stain", "Stain", "#4488cc", order=1),
+                ),
+            )
+
+            settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
+            settings.clear()
+            settings.sync()
+            window = MainWindow(settings=settings)
+            window.resize(900, 700)
+            window.show()
+            app.processEvents()
+            try:
+                window.show_wafer_image(asset)
+                window.set_grid_profile(project_path, profile)
+                window.set_effective_wafer_area(confirmed_area)
+                app.processEvents()
+
+                scratch_box = window.findChild(QCheckBox, "defectClass_scratchCheckBox")
+                stain_box = window.findChild(QCheckBox, "defectClass_stainCheckBox")
+                annotate_button = window.findChild(QPushButton, "annotateToolButton")
+                if annotate_button is None:
+                    annotate_button = window.findChild(QPushButton, "annotatetoolbutton")
+                mark_reviewed_button = window.findChild(QPushButton, "markImageReviewedButton")
+                labeled_label = window.findChild(QLabel, "labeledGridCountLabel")
+                unreviewed_label = window.findChild(QLabel, "unreviewedGridCountLabel")
+                derived_normal_label = window.findChild(QLabel, "derivedNormalGridCountLabel")
+                excluded_label = window.findChild(QLabel, "excludedGridCountLabel")
+
+                self.assertIsNotNone(scratch_box)
+                self.assertIsNotNone(stain_box)
+                self.assertIsNotNone(annotate_button)
+                self.assertTrue(scratch_box.isVisible())
+                self.assertTrue(stain_box.isVisible())
+                self.assertTrue(annotate_button.isVisible())
+                self.assertFalse(mark_reviewed_button.isEnabled())
+
+                scratch_box.click()
+                stain_box.click()
+                self.assertTrue(scratch_box.isChecked())
+                self.assertTrue(stain_box.isChecked())
+                annotate_button.click()
+                app.processEvents()
+
+                view = window.centralWidget()
+                target = view.mapFromScene(QPointF(8, 6))
+                self.assertTrue(view.viewport().rect().contains(target))
+                QTest.mouseClick(
+                    view.viewport(),
+                    Qt.MouseButton.LeftButton,
+                    Qt.KeyboardModifier.NoModifier,
+                    target,
+                )
+                app.processEvents()
+
+                annotation = load_grid_annotation(
+                    project_path,
+                    asset.image_asset_id,
+                    0,
+                    0,
+                )
+                self.assertIsNotNone(annotation)
+                self.assertEqual(annotation.class_codes, ("scratch", "stain"))
+                self.assertTrue(mark_reviewed_button.isEnabled())
+                self.assertEqual(labeled_label.text(), "Labeled: 1")
+                self.assertEqual(unreviewed_label.text(), "Unreviewed: 3")
+                self.assertEqual(derived_normal_label.text(), "Derived Normal: 0")
+                self.assertEqual(excluded_label.text(), "Excluded: 0")
+
+                mark_reviewed_button.click()
+                app.processEvents()
+                self.assertTrue(
+                    load_review_state(project_path, asset.image_asset_id).reviewed
+                )
+                self.assertEqual(
+                    load_review_counts(project_path, asset.image_asset_id).labeled,
+                    1,
+                )
+                self.assertEqual(labeled_label.text(), "Labeled: 1")
+                self.assertEqual(unreviewed_label.text(), "Unreviewed: 0")
+                self.assertEqual(derived_normal_label.text(), "Derived Normal: 3")
+                self.assertEqual(excluded_label.text(), "Excluded: 0")
+                self.assertFalse(mark_reviewed_button.isEnabled())
             finally:
                 window.close()
                 window.deleteLater()
