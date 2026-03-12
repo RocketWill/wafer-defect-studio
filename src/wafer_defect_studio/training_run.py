@@ -370,6 +370,8 @@ def resume_training_run(
         raise TrainingRunError("resume requires a terminal parent Training Run")
     if not _has_checkpoint(parent):
         raise TrainingRunError("resume requires a validated model.pt checkpoint")
+    if environment is not None:
+        _require_complete_environment(environment)
     config = _child_config(parent.config, config_overrides)
     inherited_environment = parent.environment if environment is None else environment
     return create_training_run(
@@ -399,6 +401,8 @@ def clone_after_oom(
     _require_positive_int(batch_size, "batch_size")
     if batch_size >= parent.config.batch_size:
         raise TrainingRunError("OOM clone batch_size must be smaller than the parent")
+    if environment is not None:
+        _require_complete_environment(environment)
     config = _child_config(parent.config, {"batch_size": batch_size})
     inherited_environment = parent.environment if environment is None else environment
     return create_training_run(

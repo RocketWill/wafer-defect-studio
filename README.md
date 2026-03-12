@@ -8,7 +8,7 @@ A Windows desktop MVP for source-pixel-aligned wafer grid classification. It kee
 
 ## Current status
 
-The domain services and feature controls for tickets 01–13 are implemented. The desktop shell now exposes Create Project, Open Project, referenced Wafer Image import, a persistent Project Hub with recent-project source health, and GUI smoke coverage for the connected project/grid/annotation/review workflow. Training, evaluation, and detection controls still rely on prepared service configuration rather than one fully connected end-user workflow.
+The domain services and feature controls for tickets 01–14 are implemented. The desktop shell now exposes Create Project, Open Project, referenced Wafer Image import, a persistent Project Hub with recent-project source health, and GUI smoke coverage for the connected project/grid/annotation/review workflow. Training Runs now retain environment provenance; training, evaluation, and detection controls still rely on prepared service configuration rather than one fully connected end-user workflow.
 
 ## Capabilities
 
@@ -75,7 +75,7 @@ python benchmarks/first_useful_display.py
 python benchmarks/interaction_feedback.py --samples 3
 ```
 
-The latest local validation ran 95 tests successfully. Three focused GUI smoke tests cover create/import/display, grid/origin/area confirmation, and multi-label annotation/review; training through export remains service-pipeline evidence. A synthetic 20 MP `uint16` image reached first useful display in 0.218 seconds, and the measured view interactions remained below the 100 ms target. These are local/offscreen checks, not multi-machine production certification; see [the MVP validation report](.scratch/wafer-defect-classification/mvp-validation-report.md) for the exact evidence and limits.
+The latest local validation ran 98 tests successfully. Three focused GUI smoke tests cover create/import/display, grid/origin/area confirmation, and multi-label annotation/review; training through export remains service-pipeline evidence. Training Runs capture Python/ML/OS/CUDA provenance with explicit unavailable values when hardware facts cannot be read. A synthetic 20 MP `uint16` image reached first useful display in 0.218 seconds, and the measured view interactions remained below the 100 ms target. These are local/offscreen checks, not multi-machine production certification; see [the MVP validation report](.scratch/wafer-defect-classification/mvp-validation-report.md) for the exact evidence and limits.
 
 ## Project layout
 
@@ -91,7 +91,6 @@ docs/agents/               Domain and delivery rules
 ## Known gaps found in the repository review
 
 - The service-pipeline smoke validates domain orchestration; the three GUI smoke tests separately cover the connected desktop workflow through annotation/review.
-- completed Training Runs may persist an empty environment record instead of automatically capturing Python, PyTorch, torchvision, CUDA/driver, OS, and package versions.
 - Runtime imports include NumPy, PyTorch, and torchvision, but `pyproject.toml` does not declare them.
 - Some UI copy says “Labeled” where the domain vocabulary calls for Grid Annotations / Defect Classes.
 - `MainWindow` and the three worker modules contain repeated wiring that is a maintainability concern, though not an immediate correctness failure.

@@ -21,6 +21,7 @@ from wafer_defect_studio.project import (
 )
 from wafer_defect_studio.training_run import (
     RunConfig,
+    TrainingRunError,
     clone_after_oom,
     create_training_run,
     load_training_run,
@@ -108,6 +109,26 @@ class TrainingRunLifecycleTest(unittest.TestCase):
             self.assertEqual(resumed.config.epochs, 2)
             self.assertNotEqual(resumed.run_id, parent.run_id)
             self.assertTrue(resumed.staging_path.is_dir())
+            self.assertEqual(resumed.environment, completed.environment)
+
+            override_environment = dict(completed.environment)
+            override_environment["python"] = "explicit-child-python"
+            overridden_resume = resume_training_run(
+                project_path,
+                completed.run_id,
+                new_run_id="resumed-override",
+                environment=override_environment,
+            )
+            self.assertEqual(overridden_resume.environment, override_environment)
+
+            with self.assertRaisesRegex(TrainingRunError, "complete environment"):
+                resume_training_run(
+                    project_path,
+                    completed.run_id,
+                    new_run_id="incomplete-resume",
+                    environment={"python": ""},
+                )
+            self.assertFalse((project_path / "runs" / "incomplete-resume").exists())
 
             oom_parent = create_training_run(
                 project_path, config, run_id="oom-parent"
@@ -132,6 +153,17 @@ class TrainingRunLifecycleTest(unittest.TestCase):
             self.assertEqual(clone.config.split_id, config.split_id)
             self.assertEqual(clone.config.class_count, config.class_count)
             self.assertTrue(clone.staging_path.is_dir())
+            self.assertEqual(clone.environment, failed.environment)
+
+            with self.assertRaisesRegex(TrainingRunError, "complete environment"):
+                clone_after_oom(
+                    project_path,
+                    failed.run_id,
+                    batch_size=2,
+                    new_run_id="incomplete-clone",
+                    environment={"python": ""},
+                )
+            self.assertFalse((project_path / "runs" / "incomplete-clone").exists())
 
 
 if __name__ == "__main__":
