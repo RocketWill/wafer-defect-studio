@@ -2,7 +2,7 @@
 
 A Windows desktop MVP for source-pixel-aligned wafer grid classification. It keeps the original grayscale pixels authoritative while supporting multi-label review, reproducible training snapshots, model evaluation, approximate CAM localization, and result export.
 
-![Wafer Defect Studio showing a synthetic wafer, annotation grid, and review controls](docs/images/wafer-defect-studio-overview.png)
+![Current Wafer Defect Studio PySide6 editor showing a synthetic wafer, annotation grid, effective area, and review controls](docs/images/wafer-defect-studio-overview.png)
 
 > The screenshot is a real PySide6 Widgets render using a generated wafer image; it is not production inspection data.
 
