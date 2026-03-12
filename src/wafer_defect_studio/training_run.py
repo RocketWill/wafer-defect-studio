@@ -28,6 +28,7 @@ from .project import (
     ProjectError,
     open_project,
 )
+from .environment import collect_training_environment
 
 
 _INITIAL_STATUS = "created"
@@ -153,9 +154,9 @@ def create_training_run(
     _validate_optional_id(parent_run_id, "parent_run_id")
     chosen_id = run_id or str(uuid.uuid4())
     _validate_run_id(chosen_id)
-    environment_value = _json_mapping(
-        {} if environment is None else environment,
-        "environment",
+    environment_value = _merge_environment(
+        collect_training_environment(),
+        environment,
     )
     info = open_project(project_path)
     if info.schema_version < _DATASET_SPLIT_SCHEMA_VERSION:
@@ -551,6 +552,25 @@ def _json_mapping(value: Mapping[str, Any], name: str) -> dict[str, Any]:
     except (TypeError, ValueError) as error:
         raise ValueError(f"{name} must contain JSON values") from error
     return result
+
+
+def _merge_environment(
+    collected: Mapping[str, Any],
+    overrides: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    merged = _json_mapping(collected, "environment")
+    if overrides is None:
+        return merged
+    explicit = _json_mapping(overrides, "environment")
+    if "packages" in explicit:
+        base_packages = merged.get("packages", {})
+        override_packages = explicit["packages"]
+        if not isinstance(base_packages, Mapping) or not isinstance(override_packages, Mapping):
+            raise ValueError("environment packages must be mappings")
+        explicit = dict(explicit)
+        explicit["packages"] = {**base_packages, **override_packages}
+    merged.update(explicit)
+    return _json_mapping(merged, "environment")
 
 
 def _decode_mapping(serialized: str, name: str) -> dict[str, Any]:

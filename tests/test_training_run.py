@@ -4,6 +4,7 @@ import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from wafer_defect_studio import project
 from wafer_defect_studio.defect_class import load_defect_classes
@@ -32,6 +33,58 @@ from wafer_defect_studio.training_run import (
 
 
 class TrainingRunTest(unittest.TestCase):
+    def test_create_run_collects_and_merges_environment_provenance(self):
+        with TemporaryDirectory() as temporary_directory:
+            project_path = Path(temporary_directory) / "project"
+            _prepare_training_project(project_path)
+            config = RunConfig(snapshot_id="snapshot-1", split_id="split-1")
+            collected = {
+                "python": "3.11.15",
+                "pytorch": "2.13.0",
+                "torchvision": "0.28.0",
+                "cuda": "unavailable",
+                "cuda_driver": "unavailable",
+                "os": "test-os",
+                "gpu": "unavailable",
+                "packages": {"numpy": "2.4.6", "torch": "2.13.0"},
+            }
+            overrides = {
+                "python": "caller-python",
+                "cuda": "caller-cuda",
+                "packages": {"torch": "caller-torch", "custom": "1.0"},
+                "custom": "caller-value",
+            }
+
+            with patch(
+                "wafer_defect_studio.training_run.collect_training_environment",
+                return_value=collected,
+            ) as collector:
+                run = create_training_run(
+                    project_path,
+                    config,
+                    run_id="run-collected",
+                )
+                overridden = create_training_run(
+                    project_path,
+                    config,
+                    environment=overrides,
+                    run_id="run-overridden",
+                )
+
+            self.assertEqual(collector.call_count, 2)
+            self.assertEqual(run.environment, collected)
+            expected = dict(collected)
+            expected.update(overrides)
+            expected["packages"] = {
+                **collected["packages"],
+                **overrides["packages"],
+            }
+            self.assertEqual(overridden.environment, expected)
+            self.assertEqual(
+                load_training_run(project_path, "run-overridden").environment,
+                expected,
+            )
+
     def test_persists_immutable_run_and_publishes_only_validated_stage(self):
         with TemporaryDirectory() as temporary_directory:
             project_path = Path(temporary_directory) / "project"
@@ -154,6 +207,43 @@ class TrainingRunTest(unittest.TestCase):
                 update_training_run_terminal(project_path, "run-2", "completed")
             self.assertFalse((project_path / "runs" / "run-2").exists())
             self.assertEqual(load_training_run(project_path, "run-2").status, "created")
+
+def _prepare_training_project(project_path: Path) -> None:
+    project.create_project(project_path)
+    database_path = project_path / "project.sqlite"
+    connection = sqlite3.connect(database_path)
+    try:
+        for statement in (
+            _GRID_PROFILES_TABLE_SQL,
+            _IMAGE_GRID_PLACEMENTS_TABLE_SQL,
+            _EFFECTIVE_WAFER_AREAS_TABLE_SQL,
+            _DEFECT_CLASSES_TABLE_SQL,
+            _GRID_ANNOTATIONS_TABLE_SQL,
+            _IMAGE_REVIEWS_TABLE_SQL,
+            _DATA_GROUPS_TABLE_SQL,
+            _IMAGE_DATA_GROUPS_TABLE_SQL,
+            _TRAINING_SCOPE_TABLE_SQL,
+            _DATASET_SNAPSHOTS_TABLE_SQL,
+            _DATASET_SPLITS_TABLE_SQL,
+        ):
+            connection.execute(statement)
+        connection.execute(
+            "INSERT INTO defect_classes VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("particle", "Particle", "#ffffff", "", "", 0, 1),
+        )
+        connection.execute(
+            "INSERT INTO dataset_snapshots VALUES (?, ?, ?)",
+            ("snapshot-1", "2026-01-01T00:00:00+00:00", "{}"),
+        )
+        connection.execute(
+            "INSERT INTO dataset_splits VALUES (?, ?, ?, ?)",
+            ("split-1", "snapshot-1", 7, "{}"),
+        )
+        connection.execute("UPDATE project_metadata SET schema_version = 12")
+        connection.execute("PRAGMA user_version = 12")
+        connection.commit()
+    finally:
+        connection.close()
 
 
 if __name__ == "__main__":
