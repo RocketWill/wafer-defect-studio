@@ -34,6 +34,16 @@ from .environment import collect_training_environment
 _INITIAL_STATUS = "created"
 _STATUSES = {"created", "running", "completed", "cancelled", "failed", "interrupted"}
 _TERMINAL_STATUSES = {"completed", "cancelled", "failed", "interrupted"}
+REQUIRED_ENVIRONMENT_KEYS = (
+    "python",
+    "pytorch",
+    "torchvision",
+    "cuda",
+    "cuda_driver",
+    "os",
+    "gpu",
+    "packages",
+)
 _OOM_ERROR_CODES = {"out_of_memory", "oom"}
 _CHECKPOINT_NAME = "model.pt"
 _IMMUTABLE_COLUMNS = (
@@ -311,6 +321,7 @@ def update_training_run_terminal(
     published_path: Path | None = current.artifact_path
     stage_value = Path(staging_path).expanduser().resolve() if staging_path else current.staging_path
     if status == "completed":
+        _require_complete_environment(current.environment)
         if stage_value is None:
             raise TrainingRunError("completed Training Runs require staged artifacts")
         published_path = publish_staged_artifacts(info.path, run_id, stage_value)
@@ -571,6 +582,22 @@ def _merge_environment(
         explicit["packages"] = {**base_packages, **override_packages}
     merged.update(explicit)
     return _json_mapping(merged, "environment")
+
+
+def _require_complete_environment(environment: Mapping[str, Any]) -> None:
+    missing = []
+    for key in REQUIRED_ENVIRONMENT_KEYS:
+        value = environment.get(key)
+        if key == "packages":
+            if not isinstance(value, Mapping) or not value:
+                missing.append(key)
+        elif not isinstance(value, str) or not value.strip():
+            missing.append(key)
+    if missing:
+        raise TrainingRunError(
+            "completed Training Runs require complete environment provenance; "
+            f"missing or empty keys: {', '.join(missing)}"
+        )
 
 
 def _decode_mapping(serialized: str, name: str) -> dict[str, Any]:

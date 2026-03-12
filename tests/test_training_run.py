@@ -33,6 +33,56 @@ from wafer_defect_studio.training_run import (
 
 
 class TrainingRunTest(unittest.TestCase):
+    def test_completed_run_requires_complete_environment_before_publish(self):
+        with TemporaryDirectory() as temporary_directory:
+            project_path = Path(temporary_directory) / "project"
+            _prepare_training_project(project_path)
+            config = RunConfig(snapshot_id="snapshot-1", split_id="split-1")
+            corrupt = create_training_run(
+                project_path,
+                config,
+                run_id="run-corrupt",
+            )
+            _stage_valid_model(corrupt)
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
+                connection.execute("DROP TRIGGER training_runs_no_immutable_update")
+                connection.execute(
+                    "UPDATE training_runs SET environment_json = '{}' "
+                    "WHERE run_id = ?",
+                    (corrupt.run_id,),
+                )
+                connection.execute(
+                    "CREATE TRIGGER training_runs_no_immutable_update "
+                    "BEFORE UPDATE OF run_id, created_at, snapshot_id, split_id, "
+                    "parent_run_id, config_json, environment_json ON training_runs "
+                    "BEGIN SELECT RAISE(ABORT, 'Training Run configuration is immutable'); END"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaisesRegex(TrainingRunError, "complete environment"):
+                update_training_run_terminal(project_path, corrupt.run_id, "completed")
+            self.assertTrue(corrupt.staging_path.is_dir())
+            self.assertFalse((project_path / "runs" / corrupt.run_id).exists())
+
+            valid = create_training_run(
+                project_path,
+                config,
+                run_id="run-valid",
+            )
+            _stage_valid_model(valid)
+            completed = update_training_run_terminal(
+                project_path,
+                valid.run_id,
+                "completed",
+            )
+            self.assertEqual(completed.status, "completed")
+            self.assertIsNotNone(completed.artifact_path)
+            self.assertTrue(completed.artifact_path.is_dir())
+            self.assertFalse(valid.staging_path.exists())
+
     def test_create_run_collects_and_merges_environment_provenance(self):
         with TemporaryDirectory() as temporary_directory:
             project_path = Path(temporary_directory) / "project"
@@ -244,6 +294,25 @@ def _prepare_training_project(project_path: Path) -> None:
         connection.commit()
     finally:
         connection.close()
+
+
+def _stage_valid_model(run) -> None:
+    model = run.staging_path / "model.pt"
+    model.write_bytes(b"weights")
+    (run.staging_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "required_files": ["model.pt"],
+                "files": [
+                    {
+                        "path": "model.pt",
+                        "sha256": hashlib.sha256(b"weights").hexdigest(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
