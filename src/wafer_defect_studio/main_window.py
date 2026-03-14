@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QSettings, QTimer, Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QCheckBox,
     QDockWidget,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QPushButton,
+    QToolBar,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -270,6 +271,16 @@ class MainWindow(QMainWindow):
     """Top-level window for Wafer Defect Studio."""
 
     _RECENT_PROJECTS_KEY = "recentProjects"
+    WORKSPACES = (
+        "Data",
+        "Annotate",
+        "Dataset",
+        "Train",
+        "Evaluate",
+        "Detect",
+        "Review",
+    )
+    workspaceChanged = Signal(str)
 
     def __init__(
         self,
@@ -285,6 +296,34 @@ class MainWindow(QMainWindow):
             else QSettings("WaferDefectStudio", "WaferDefectStudio")
         )
         self._active_project_path: Path | None = None
+        self._current_workspace = self.WORKSPACES[0]
+        self.workspace_toolbar = QToolBar("Workspace Navigation", self)
+        self.workspace_toolbar.setObjectName("workspaceToolbar")
+        self.workspace_toolbar.setAccessibleName("Workspace navigation")
+        self.workspace_toolbar.setMovable(False)
+        self.workspace_toolbar.setFloatable(False)
+        self.workspace_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.workspace_toolbar.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._workspace_action_group = QActionGroup(self)
+        self._workspace_action_group.setExclusive(True)
+        self.workspace_actions: dict[str, QAction] = {}
+        for workspace in self.WORKSPACES:
+            action = QAction(workspace, self)
+            action.setObjectName(f"{workspace.lower()}WorkspaceAction")
+            action.setCheckable(True)
+            action.setActionGroup(self._workspace_action_group)
+            action.triggered.connect(
+                lambda _checked, selected=workspace: self._set_workspace(selected)
+            )
+            self.workspace_toolbar.addAction(action)
+            button = self.workspace_toolbar.widgetForAction(action)
+            if button is not None:
+                button.setObjectName(f"{workspace.lower()}WorkspaceButton")
+                button.setAccessibleName(workspace)
+                button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            self.workspace_actions[workspace] = action
+        self.workspace_actions[self._current_workspace].setChecked(True)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.workspace_toolbar)
         file_menu = self.menuBar().addMenu("File")
         self.create_project_action = QAction("Create Project…", self)
         self.create_project_action.setObjectName("createProjectAction")
@@ -484,6 +523,23 @@ class MainWindow(QMainWindow):
         self._jobs_dock.hide()
         ensure_accessible_labels(self)
         apply_theme(self, ThemeMode.SYSTEM)
+        self.statusBar().showMessage(f"Workspace: {self._current_workspace}")
+
+    @property
+    def current_workspace(self) -> str:
+        """Return the currently selected product workspace."""
+
+        return self._current_workspace
+
+    def _set_workspace(self, workspace: str) -> None:
+        if workspace == self._current_workspace:
+            return
+        if workspace not in self.workspace_actions:
+            raise ValueError(f"Unknown workspace: {workspace}")
+        self._current_workspace = workspace
+        self.workspace_actions[workspace].setChecked(True)
+        self.statusBar().showMessage(f"Workspace: {workspace}")
+        self.workspaceChanged.emit(workspace)
 
     @property
     def active_project_path(self) -> Path | None:
