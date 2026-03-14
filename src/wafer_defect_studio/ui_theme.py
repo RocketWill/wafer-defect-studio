@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
 
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
 
@@ -34,6 +34,30 @@ class SemanticColors:
         return _contrast_ratio(self.focus, self.surface)
 
 
+@dataclass(frozen=True, slots=True)
+class TypographyScale:
+    """System-font roles expressed as Qt point sizes.
+
+    The values use a 1.25 modular step around the 12 pt body baseline.  The
+    font family remains the one supplied by the operating system; this scale
+    only controls point sizes.
+    """
+
+    caption_pt: float = 9.6
+    body_pt: float = 12.0
+    section_pt: float = 15.0
+    title_pt: float = 18.75
+
+
+_TYPOGRAPHY_SCALE = TypographyScale()
+
+
+def typography_scale() -> TypographyScale:
+    """Return the immutable system-font typography scale."""
+
+    return _TYPOGRAPHY_SCALE
+
+
 def apply_theme(
     target: QApplication | QWidget,
     mode: ThemeMode | str = ThemeMode.SYSTEM,
@@ -44,6 +68,9 @@ def apply_theme(
     if not isinstance(target, (QApplication, QWidget)):
         raise TypeError("target must be a QApplication or QWidget")
     colors = SemanticColors()
+    font: QFont = target.font()
+    font.setPointSizeF(typography_scale().body_pt)
+    target.setFont(font)
     target.setStyleSheet(_focus_stylesheet(colors))
     if chosen is ThemeMode.LIGHT:
         _apply_light_palette(target, colors)
@@ -106,4 +133,11 @@ def _relative_luminance(color: QColor) -> float:
     return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
 
 
-__all__ = ["SemanticColors", "ThemeMode", "apply_theme", "semantic_colors"]
+__all__ = [
+    "SemanticColors",
+    "ThemeMode",
+    "TypographyScale",
+    "apply_theme",
+    "semantic_colors",
+    "typography_scale",
+]
