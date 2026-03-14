@@ -46,6 +46,7 @@ class WaferView(QGraphicsView):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("waferCanvas")
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
         self._loaded_wafer_image: LoadedWaferImage | None = None

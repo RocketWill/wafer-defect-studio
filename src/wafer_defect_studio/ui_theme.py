@@ -101,7 +101,9 @@ def _focus_stylesheet(colors: SemanticColors) -> str:
     return (
         "QPushButton:focus, QToolButton:focus, QCheckBox:focus, "
         "QComboBox:focus, QLineEdit:focus, QSpinBox:focus, "
-        "QDoubleSpinBox:focus, QSlider:focus, QTableWidget:focus { "
+        "QDoubleSpinBox:focus, QSlider:focus, QTableWidget:focus, "
+        "QListWidget:focus, QGraphicsView:focus, QPlainTextEdit:focus, "
+        "QTabWidget:focus, QTabBar:focus, QToolBar:focus { "
         f"border: 2px solid {colors.focus}; "
         f"outline: 1px solid {colors.border}; "
         "border-radius: 2px; "

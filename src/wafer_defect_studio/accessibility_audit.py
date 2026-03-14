@@ -7,12 +7,16 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractItemView,
     QComboBox,
     QDoubleSpinBox,
+    QGraphicsView,
     QLineEdit,
+    QPlainTextEdit,
     QSlider,
     QSpinBox,
-    QTableWidget,
+    QTabWidget,
+    QToolBar,
     QWidget,
 )
 
@@ -32,12 +36,16 @@ class AccessibilityFinding:
 
 _ACTIONABLE_TYPES = (
     QAbstractButton,
+    QAbstractItemView,
     QLineEdit,
     QComboBox,
     QSpinBox,
     QDoubleSpinBox,
     QSlider,
-    QTableWidget,
+    QGraphicsView,
+    QPlainTextEdit,
+    QTabWidget,
+    QToolBar,
 )
 
 
