@@ -323,6 +323,7 @@ class MainWindow(QMainWindow):
                 button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             self.workspace_actions[workspace] = action
         self.workspace_actions[self._current_workspace].setChecked(True)
+        self._set_workspace_actions_enabled(False)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.workspace_toolbar)
         file_menu = self.menuBar().addMenu("File")
         self.create_project_action = QAction("Create Project…", self)
@@ -523,7 +524,9 @@ class MainWindow(QMainWindow):
         self._jobs_dock.hide()
         ensure_accessible_labels(self)
         apply_theme(self, ThemeMode.SYSTEM)
-        self.statusBar().showMessage(f"Workspace: {self._current_workspace}")
+        self.statusBar().showMessage(
+            f"No active project — Workspace: {self._current_workspace}"
+        )
 
     @property
     def current_workspace(self) -> str:
@@ -540,6 +543,12 @@ class MainWindow(QMainWindow):
         self.workspace_actions[workspace].setChecked(True)
         self.statusBar().showMessage(f"Workspace: {workspace}")
         self.workspaceChanged.emit(workspace)
+
+    def _set_workspace_actions_enabled(self, has_project: bool) -> None:
+        """Keep Data available while project-dependent workspaces are gated."""
+
+        for workspace, action in self.workspace_actions.items():
+            action.setEnabled(has_project or workspace == self.WORKSPACES[0])
 
     @property
     def active_project_path(self) -> Path | None:
@@ -602,6 +611,7 @@ class MainWindow(QMainWindow):
 
     def _activate_project(self, project_info, status: str) -> None:
         self._active_project_path = project_info.path
+        self._set_workspace_actions_enabled(True)
         self.import_wafer_image_action.setEnabled(True)
         self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
         self.statusBar().showMessage(f"{status}: {project_info.path}")
