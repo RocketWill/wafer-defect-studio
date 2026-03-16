@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFormLayout,
+    QAbstractItemView,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QToolBar,
+    QTableWidget,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -346,6 +348,65 @@ class MainWindow(QMainWindow):
         self._loaded_wafer_image: LoadedWaferImage | None = None
         self._image_view = WaferView()
         self.setCentralWidget(self._image_view)
+        self._data_workspace = QWidget(self)
+        self._data_workspace.setObjectName("dataWorkspace")
+        self._data_workspace.setAccessibleName("Data workspace")
+        data_layout = QVBoxLayout(self._data_workspace)
+        data_title = QLabel("Data", self._data_workspace)
+        data_title.setObjectName("dataWorkspaceTitle")
+        data_layout.addWidget(data_title)
+        self._data_workspace_context_label = QLabel(
+            "No active project. Create or open a project to view registered Wafer Images.",
+            self._data_workspace,
+        )
+        self._data_workspace_context_label.setObjectName("dataWorkspaceContextLabel")
+        self._data_workspace_context_label.setWordWrap(True)
+        data_layout.addWidget(self._data_workspace_context_label)
+        self._image_inventory_table = QTableWidget(0, 5, self._data_workspace)
+        self._image_inventory_table.setObjectName("imageInventoryTable")
+        self._image_inventory_table.setAccessibleName("Wafer Image inventory")
+        self._image_inventory_table.setHorizontalHeaderLabels(
+            ("Wafer Image", "Dimensions", "Format", "Source Health", "Data Group")
+        )
+        self._image_inventory_table.horizontalHeader().setAccessibleName(
+            "Wafer Image inventory columns"
+        )
+        self._image_inventory_table.verticalHeader().setAccessibleName(
+            "Wafer Image inventory rows"
+        )
+        self._image_inventory_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self._image_inventory_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._image_inventory_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self._image_inventory_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        data_layout.addWidget(self._image_inventory_table)
+        self._data_groups_empty_state = QLabel(
+            "No Data Groups configured.", self._data_workspace
+        )
+        self._data_groups_empty_state.setObjectName("dataGroupsEmptyState")
+        self._data_groups_empty_state.setWordWrap(True)
+        data_layout.addWidget(self._data_groups_empty_state)
+        self._image_inspector_empty_state = QLabel(
+            "No active project. Select a Wafer Image to inspect its metadata.",
+            self._data_workspace,
+        )
+        self._image_inspector_empty_state.setObjectName("imageInspectorEmptyState")
+        self._image_inspector_empty_state.setWordWrap(True)
+        data_layout.addWidget(self._image_inspector_empty_state)
+        self._data_workspace_dock = QDockWidget("Data", self)
+        self._data_workspace_dock.setObjectName("dataWorkspaceDock")
+        self._data_workspace_dock.setAccessibleName("Data workspace")
+        self._data_workspace_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self._data_workspace_dock.setWidget(self._data_workspace)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._data_workspace_dock)
+        self._data_workspace_dock.show()
         self.project_hub_list = QListWidget(self)
         self.project_hub_list.setObjectName("projectHubList")
         self.project_hub_list.itemActivated.connect(self._open_recent_project)
@@ -549,6 +610,7 @@ class MainWindow(QMainWindow):
         self._settings.setValue(self._CURRENT_WORKSPACE_KEY, workspace)
         self._settings.sync()
         self.statusBar().showMessage(f"Workspace: {workspace}")
+        self._data_workspace_dock.setVisible(workspace == self.WORKSPACES[0])
         self.workspaceChanged.emit(workspace)
 
     def _set_workspace_actions_enabled(self, has_project: bool) -> None:
@@ -622,6 +684,12 @@ class MainWindow(QMainWindow):
         self._settings.sync()
         self._set_workspace_actions_enabled(True)
         self.import_wafer_image_action.setEnabled(True)
+        self._data_workspace_context_label.setText(
+            f"Project: {project_info.path}. Registered Wafer Images will appear here."
+        )
+        self._image_inspector_empty_state.setText(
+            "Select a Wafer Image to inspect its metadata."
+        )
         self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
         self.statusBar().showMessage(f"{status}: {project_info.path}")
         self._remember_recent_project(project_info.path)
