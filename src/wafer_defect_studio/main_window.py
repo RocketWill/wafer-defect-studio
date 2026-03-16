@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QSettings, QTimer, Qt, Signal
@@ -271,6 +272,9 @@ class MainWindow(QMainWindow):
     """Top-level window for Wafer Defect Studio."""
 
     _RECENT_PROJECTS_KEY = "recentProjects"
+    _ACTIVE_PROJECT_KEY = "activeProjectPath"
+    _CURRENT_WORKSPACE_KEY = "currentWorkspace"
+    _CURRENT_IMAGE_ASSET_KEY = "currentImageAssetId"
     WORKSPACES = (
         "Data",
         "Annotate",
@@ -527,6 +531,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"No active project — Workspace: {self._current_workspace}"
         )
+        self._restore_workspace_context()
 
     @property
     def current_workspace(self) -> str:
@@ -541,6 +546,8 @@ class MainWindow(QMainWindow):
             raise ValueError(f"Unknown workspace: {workspace}")
         self._current_workspace = workspace
         self.workspace_actions[workspace].setChecked(True)
+        self._settings.setValue(self._CURRENT_WORKSPACE_KEY, workspace)
+        self._settings.sync()
         self.statusBar().showMessage(f"Workspace: {workspace}")
         self.workspaceChanged.emit(workspace)
 
@@ -611,11 +618,70 @@ class MainWindow(QMainWindow):
 
     def _activate_project(self, project_info, status: str) -> None:
         self._active_project_path = project_info.path
+        self._settings.setValue(self._ACTIVE_PROJECT_KEY, str(project_info.path))
+        self._settings.sync()
         self._set_workspace_actions_enabled(True)
         self.import_wafer_image_action.setEnabled(True)
         self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
         self.statusBar().showMessage(f"{status}: {project_info.path}")
         self._remember_recent_project(project_info.path)
+
+    def _restore_workspace_context(self) -> None:
+        """Restore persisted shell state while keeping invalid sources visible."""
+
+        saved_project = self._settings.value(self._ACTIVE_PROJECT_KEY)
+        if not saved_project:
+            return
+        try:
+            project_info = project.open_project(str(saved_project))
+        except Exception as error:
+            for key in (
+                self._ACTIVE_PROJECT_KEY,
+                self._CURRENT_WORKSPACE_KEY,
+                self._CURRENT_IMAGE_ASSET_KEY,
+            ):
+                self._settings.remove(key)
+            self._settings.sync()
+            self.statusBar().showMessage(f"No active project — Saved project unavailable: {error}")
+            return
+
+        self._activate_project(project_info, "Project restored")
+        saved_workspace = self._settings.value(self._CURRENT_WORKSPACE_KEY)
+        if saved_workspace in self.workspace_actions and saved_workspace != self._current_workspace:
+            self._set_workspace(str(saved_workspace))
+
+        if project_info.schema_version >= project._JOB_SCHEMA_VERSION:
+            self.configure_jobs_for_project(
+                project_info.path,
+                now=datetime.now(timezone.utc),
+            )
+
+        saved_image_id = self._settings.value(self._CURRENT_IMAGE_ASSET_KEY)
+        if not saved_image_id:
+            return
+        try:
+            assets = image_asset.load_image_assets(project_info.path)
+        except Exception as error:
+            self.statusBar().showMessage(f"Saved image unavailable: {error}")
+            return
+        reopened = next(
+            (
+                candidate
+                for candidate in assets
+                if candidate.asset.image_asset_id == str(saved_image_id)
+            ),
+            None,
+        )
+        if reopened is None:
+            self.statusBar().showMessage(f"Saved image unavailable: {saved_image_id}")
+            return
+        if reopened.source_health is SourceHealth.MISSING:
+            self.statusBar().showMessage(f"Missing Source: {reopened.asset.path}")
+            return
+        if reopened.source_health is SourceHealth.CHANGED:
+            self.statusBar().showMessage(f"Changed Source: {reopened.asset.path}")
+            return
+        self.load_wafer_image(reopened.asset)
 
     def _create_project(self) -> None:
         selected_path = QFileDialog.getExistingDirectory(self, "Create Project")
@@ -1009,6 +1075,8 @@ class MainWindow(QMainWindow):
 
     def _set_current_image_asset(self, asset: ImageAsset) -> None:
         self._current_image_asset = asset
+        self._settings.setValue(self._CURRENT_IMAGE_ASSET_KEY, asset.image_asset_id)
+        self._settings.sync()
         self._bind_grid_for_current_image()
 
     def _bind_grid_for_current_image(self) -> None:
