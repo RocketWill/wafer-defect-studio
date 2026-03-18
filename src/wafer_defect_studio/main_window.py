@@ -385,6 +385,9 @@ class MainWindow(QMainWindow):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self._image_inventory_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._image_inventory_table.itemSelectionChanged.connect(
+            self._on_image_inventory_selection_changed
+        )
         data_layout.addWidget(self._image_inventory_table)
         self._data_groups_empty_state = QLabel(
             "No Data Groups configured.", self._data_workspace
@@ -736,6 +739,57 @@ class MainWindow(QMainWindow):
             )
             for column, item in enumerate(values):
                 self._image_inventory_table.setItem(row, column, item)
+
+    def _on_image_inventory_selection_changed(self) -> None:
+        """Preview the selected source only after the persisted health check."""
+
+        if self._active_project_path is None:
+            return
+        row = self._image_inventory_table.currentRow()
+        if row < 0:
+            return
+        item = self._image_inventory_table.item(row, 0)
+        image_asset_id = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not image_asset_id:
+            return
+        try:
+            reopened_assets = image_asset.load_image_assets(self._active_project_path)
+        except Exception as error:
+            self.statusBar().showMessage(f"Image inventory unavailable: {error}")
+            return
+        reopened = next(
+            (
+                candidate
+                for candidate in reopened_assets
+                if candidate.asset.image_asset_id == str(image_asset_id)
+            ),
+            None,
+        )
+        if reopened is None:
+            self.statusBar().showMessage(f"Wafer Image unavailable: {image_asset_id}")
+            return
+
+        asset = reopened.asset
+        health_labels = {
+            SourceHealth.AVAILABLE: "Available",
+            SourceHealth.MISSING: "Missing Source",
+            SourceHealth.CHANGED: "Changed Source",
+        }
+        lossy = " — Lossy source" if asset.lossy_source else ""
+        self._image_inspector_empty_state.setText(
+            f"Filename: {asset.path.name}\n"
+            f"Path: {asset.path}\n"
+            f"Native dimensions: {asset.width} × {asset.height} px\n"
+            f"Dtype/format: {asset.dtype} · {asset.format}{lossy}\n"
+            f"Source health: {health_labels[reopened.source_health]}"
+        )
+        if reopened.source_health is SourceHealth.MISSING:
+            self.statusBar().showMessage(f"Missing Source: {asset.path}")
+            return
+        if reopened.source_health is SourceHealth.CHANGED:
+            self.statusBar().showMessage(f"Changed Source: {asset.path}")
+            return
+        self.load_wafer_image(reopened.asset)
 
     def _restore_workspace_context(self) -> None:
         """Restore persisted shell state while keeping invalid sources visible."""
