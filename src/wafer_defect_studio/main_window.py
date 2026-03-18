@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QToolBar,
     QTableWidget,
+    QTableWidgetItem,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -692,7 +693,49 @@ class MainWindow(QMainWindow):
         )
         self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
         self.statusBar().showMessage(f"{status}: {project_info.path}")
+        self._refresh_image_inventory(project_info.path)
         self._remember_recent_project(project_info.path)
+
+    def _refresh_image_inventory(self, project_path: str | Path | None = None) -> None:
+        """Render persisted image metadata without changing any source or project data."""
+
+        self._image_inventory_table.clearContents()
+        self._image_inventory_table.setRowCount(0)
+        resolved_path = (
+            Path(project_path).expanduser().resolve()
+            if project_path is not None
+            else self._active_project_path
+        )
+        if resolved_path is None:
+            return
+        try:
+            reopened_assets = image_asset.load_image_assets(resolved_path)
+        except Exception as error:
+            self.statusBar().showMessage(f"Image inventory unavailable: {error}")
+            return
+
+        self._image_inventory_table.setRowCount(len(reopened_assets))
+        health_labels = {
+            SourceHealth.AVAILABLE: "Available",
+            SourceHealth.MISSING: "Missing Source",
+            SourceHealth.CHANGED: "Changed Source",
+        }
+        for row, reopened in enumerate(reopened_assets):
+            asset = reopened.asset
+            image_item = QTableWidgetItem(f"{asset.path.name}\n{asset.path}")
+            image_item.setData(Qt.ItemDataRole.UserRole, asset.image_asset_id)
+            values = (
+                image_item,
+                QTableWidgetItem(f"{asset.width} × {asset.height} px"),
+                QTableWidgetItem(
+                    f"{asset.dtype} · {asset.format}"
+                    + (" — Lossy source" if asset.lossy_source else "")
+                ),
+                QTableWidgetItem(health_labels[reopened.source_health]),
+                QTableWidgetItem(""),
+            )
+            for column, item in enumerate(values):
+                self._image_inventory_table.setItem(row, column, item)
 
     def _restore_workspace_context(self) -> None:
         """Restore persisted shell state while keeping invalid sources visible."""
