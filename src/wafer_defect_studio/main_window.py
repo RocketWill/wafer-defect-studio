@@ -897,6 +897,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Import Wafer Image failed: {error}")
             return
         self.load_wafer_image(asset)
+        self._refresh_image_inventory(self._active_project_path)
         self._refresh_project_hub()
 
     def show_wafer_image(self, asset: ImageAsset) -> LoadedWaferImage:
