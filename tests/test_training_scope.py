@@ -15,12 +15,113 @@ from wafer_defect_studio.training_scope import (
     load_data_groups,
     load_image_data_group_assignments,
     load_training_scope,
+    ensure_data_group_schema,
     save_data_groups,
     save_training_scope,
 )
 
 
 class TrainingScopeTest(unittest.TestCase):
+    def test_fresh_project_bootstraps_data_group_schema_atomically(self):
+        with TemporaryDirectory() as temporary_directory:
+            project_path = Path(temporary_directory) / "project"
+            project.create_project(project_path)
+
+            ensure_data_group_schema(project_path)
+
+            info = project.open_project(project_path)
+            self.assertEqual(info.schema_version, 10)
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                self.assertTrue(
+                    {
+                        "defect_classes",
+                        "grid_annotations",
+                        "image_reviews",
+                        "data_groups",
+                        "image_data_groups",
+                        "training_scope",
+                    }.issubset(tables)
+                )
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 10)
+            finally:
+                connection.close()
+
+            save_data_groups(project_path, (DataGroup("line-a", "Line A"),))
+            self.assertEqual(load_data_groups(project_path), (DataGroup("line-a", "Line A"),))
+
+    def test_existing_intermediate_schemas_bootstrap_to_data_group_schema(self):
+        with TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            schema7 = workspace / "schema7"
+            project.create_project(schema7)
+            save_defect_classes(
+                schema7,
+                (DefectClass("scratch", "Scratch", "#cc4444"),),
+            )
+            ensure_data_group_schema(schema7)
+            self.assertEqual(project.open_project(schema7).schema_version, 10)
+
+            schema8 = workspace / "schema8"
+            project.create_project(schema8)
+            save_defect_classes(
+                schema8,
+                (DefectClass("scratch", "Scratch", "#cc4444"),),
+            )
+            connection = sqlite3.connect(schema8 / "project.sqlite")
+            try:
+                connection.execute(
+                    "CREATE TABLE grid_annotations ("
+                    "image_asset_id TEXT NOT NULL, row INTEGER NOT NULL, "
+                    "column INTEGER NOT NULL, class_codes_json TEXT NOT NULL, "
+                    "PRIMARY KEY (image_asset_id, row, column))"
+                )
+                connection.execute("UPDATE project_metadata SET schema_version = 8")
+                connection.execute("PRAGMA user_version = 8")
+                connection.commit()
+            finally:
+                connection.close()
+            ensure_data_group_schema(schema8)
+            self.assertEqual(project.open_project(schema8).schema_version, 10)
+
+    def test_data_group_schema_rejects_unsupported_or_malformed_projects_without_writes(self):
+        with TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            unsupported = workspace / "unsupported"
+            project.create_project(unsupported)
+            database = unsupported / "project.sqlite"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("UPDATE project_metadata SET schema_version = 99")
+                connection.execute("PRAGMA user_version = 99")
+                connection.commit()
+            finally:
+                connection.close()
+            unsupported_bytes = database.read_bytes()
+            with self.assertRaises(project.ProjectError):
+                ensure_data_group_schema(unsupported)
+            self.assertEqual(database.read_bytes(), unsupported_bytes)
+
+            malformed = workspace / "malformed"
+            project.create_project(malformed)
+            database = malformed / "project.sqlite"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("CREATE TABLE data_groups (bad TEXT)")
+                connection.commit()
+            finally:
+                connection.close()
+            malformed_bytes = database.read_bytes()
+            with self.assertRaises(ValueError):
+                ensure_data_group_schema(malformed)
+            self.assertEqual(database.read_bytes(), malformed_bytes)
+
     def test_data_groups_and_assignments_read_deterministically_without_legacy_writes(self):
         with TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)

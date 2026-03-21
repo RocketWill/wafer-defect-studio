@@ -10,6 +10,12 @@ from typing import Iterable
 
 from .image_asset import SourceHealth, load_image_assets
 from .project import (
+    _SCHEMA_VERSION,
+    _DEFECT_CLASS_SCHEMA_VERSION,
+    _GRID_ANNOTATION_SCHEMA_VERSION,
+    _DEFECT_CLASSES_TABLE_SQL,
+    _GRID_ANNOTATIONS_TABLE_SQL,
+    _IMAGE_REVIEWS_TABLE_SQL,
     _DATA_GROUPS_TABLE_SQL,
     _IMAGE_DATA_GROUPS_TABLE_SQL,
     _REVIEW_SCHEMA_VERSION,
@@ -51,18 +57,35 @@ class TrainingScope:
 def save_data_groups(project_path: str | Path, groups: Iterable[DataGroup]) -> None:
     values = tuple(groups)
     _validate_groups(values)
+    ensure_data_group_schema(project_path)
     project_info = open_project(project_path)
     database_path = project_info.path / "project.sqlite"
     connection = sqlite3.connect(database_path)
     try:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("BEGIN IMMEDIATE")
-        _ensure_schema(connection, project_info.project_id, database_path)
         connection.executemany(
             "INSERT INTO data_groups VALUES (?, ?, ?) ON CONFLICT(data_group_id) DO UPDATE SET "
             "name = excluded.name, display_order = excluded.display_order",
             ((group.data_group_id, group.name, group.order) for group in values),
         )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def ensure_data_group_schema(project_path: str | Path) -> None:
+    """Atomically bootstrap a validated project to the Data Group schema."""
+
+    project_info = open_project(project_path)
+    database_path = project_info.path / "project.sqlite"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _ensure_schema(connection, project_info.project_id, database_path)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -218,13 +241,40 @@ def eligible_image_ids(project_path: str | Path) -> tuple[str, ...]:
 
 def _ensure_schema(connection: sqlite3.Connection, project_id: str, database_path: Path) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
-    if version == _REVIEW_SCHEMA_VERSION:
+    if version in (
+        _SCHEMA_VERSION,
+        _DEFECT_CLASS_SCHEMA_VERSION,
+        _GRID_ANNOTATION_SCHEMA_VERSION,
+        _REVIEW_SCHEMA_VERSION,
+    ):
+        sql_by_version = {
+            _SCHEMA_VERSION: (
+                ("defect_classes", _DEFECT_CLASSES_TABLE_SQL),
+                ("grid_annotations", _GRID_ANNOTATIONS_TABLE_SQL),
+                ("image_reviews", _IMAGE_REVIEWS_TABLE_SQL),
+            ),
+            _DEFECT_CLASS_SCHEMA_VERSION: (
+                ("grid_annotations", _GRID_ANNOTATIONS_TABLE_SQL),
+                ("image_reviews", _IMAGE_REVIEWS_TABLE_SQL),
+            ),
+            _GRID_ANNOTATION_SCHEMA_VERSION: (("image_reviews", _IMAGE_REVIEWS_TABLE_SQL),),
+            _REVIEW_SCHEMA_VERSION: (),
+        }
+        missing = sql_by_version[version]
+        _require_absent_tables(
+            connection,
+            tuple(name for name, _ in missing)
+            + ("data_groups", "image_data_groups", "training_scope"),
+            database_path,
+        )
+        for _, sql in missing:
+            connection.execute(sql)
         connection.execute(_DATA_GROUPS_TABLE_SQL)
         connection.execute(_IMAGE_DATA_GROUPS_TABLE_SQL)
         connection.execute(_TRAINING_SCOPE_TABLE_SQL)
         updated = connection.execute(
             "UPDATE project_metadata SET schema_version = ? WHERE project_id = ? AND schema_version = ?",
-            (_TRAINING_SCOPE_SCHEMA_VERSION, project_id, _REVIEW_SCHEMA_VERSION),
+            (_TRAINING_SCOPE_SCHEMA_VERSION, project_id, version),
         ).rowcount
         if updated != 1:
             raise TrainingScopeError(f"Invalid project metadata: {database_path}")
@@ -238,6 +288,20 @@ def _ensure_schema(connection: sqlite3.Connection, project_id: str, database_pat
         _DETECTION_SCHEMA_VERSION,
     ):
         raise TrainingScopeError("Training Scope requires project schema 9 or newer")
+
+
+def _require_absent_tables(
+    connection: sqlite3.Connection,
+    table_names: tuple[str, ...],
+    database_path: Path,
+) -> None:
+    placeholders = ",".join("?" for _ in table_names)
+    rows = connection.execute(
+        f"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ({placeholders})",
+        table_names,
+    ).fetchall()
+    if rows:
+        raise TrainingScopeError(f"Cannot bootstrap malformed project: {database_path}")
 
 
 def _ordered_selection(
