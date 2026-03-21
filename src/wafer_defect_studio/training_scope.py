@@ -37,6 +37,12 @@ class DataGroup:
 
 
 @dataclass(frozen=True)
+class DataGroupAssignment:
+    image_asset_id: str
+    data_group_id: str
+
+
+@dataclass(frozen=True)
 class TrainingScope:
     data_group_ids: tuple[str, ...]
     class_codes: tuple[str, ...]
@@ -63,6 +69,44 @@ def save_data_groups(project_path: str | Path, groups: Iterable[DataGroup]) -> N
         raise
     finally:
         connection.close()
+
+
+def load_data_groups(project_path: str | Path) -> tuple[DataGroup, ...]:
+    """Read persisted Data Groups in their stable display order."""
+
+    project_info = open_project(project_path)
+    if project_info.schema_version < _TRAINING_SCOPE_SCHEMA_VERSION:
+        return ()
+    connection = _read_only(project_info.path / "project.sqlite")
+    try:
+        rows = connection.execute(
+            "SELECT data_group_id, name, display_order FROM data_groups "
+            "ORDER BY display_order, data_group_id"
+        ).fetchall()
+    finally:
+        connection.close()
+    return tuple(DataGroup(row[0], row[1], row[2]) for row in rows)
+
+
+def load_image_data_group_assignments(
+    project_path: str | Path,
+) -> tuple[DataGroupAssignment, ...]:
+    """Read image membership in Data Group display order and image id order."""
+
+    project_info = open_project(project_path)
+    if project_info.schema_version < _TRAINING_SCOPE_SCHEMA_VERSION:
+        return ()
+    connection = _read_only(project_info.path / "project.sqlite")
+    try:
+        rows = connection.execute(
+            "SELECT image_data_groups.image_asset_id, image_data_groups.data_group_id "
+            "FROM image_data_groups JOIN data_groups USING (data_group_id) "
+            "ORDER BY data_groups.display_order, data_groups.data_group_id, "
+            "image_data_groups.image_asset_id"
+        ).fetchall()
+    finally:
+        connection.close()
+    return tuple(DataGroupAssignment(row[0], row[1]) for row in rows)
 
 
 def assign_image_to_data_group(

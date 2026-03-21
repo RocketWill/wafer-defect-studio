@@ -8,9 +8,12 @@ from wafer_defect_studio import project
 from wafer_defect_studio.defect_class import DefectClass, save_defect_classes
 from wafer_defect_studio.training_scope import (
     DataGroup,
+    DataGroupAssignment,
     TrainingScope,
     assign_image_to_data_group,
     eligible_image_ids,
+    load_data_groups,
+    load_image_data_group_assignments,
     load_training_scope,
     save_data_groups,
     save_training_scope,
@@ -18,6 +21,43 @@ from wafer_defect_studio.training_scope import (
 
 
 class TrainingScopeTest(unittest.TestCase):
+    def test_data_groups_and_assignments_read_deterministically_without_legacy_writes(self):
+        with TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            project_path = workspace / "project"
+            project.create_project(project_path)
+            database = project_path / "project.sqlite"
+            legacy_bytes = database.read_bytes()
+
+            self.assertEqual(load_data_groups(project_path), ())
+            self.assertEqual(load_image_data_group_assignments(project_path), ())
+            self.assertEqual(database.read_bytes(), legacy_bytes)
+            self.assertEqual(project.open_project(project_path).schema_version, 6)
+
+            save_defect_classes(
+                project_path,
+                (DefectClass("scratch", "Scratch", "#cc4444"),),
+            )
+            _seed_reviewed_images(project_path, workspace)
+            save_data_groups(
+                project_path,
+                (DataGroup("line-b", "Line B", 1), DataGroup("line-a", "Line A", 0)),
+            )
+            assign_image_to_data_group(project_path, "available", "line-b")
+            assign_image_to_data_group(project_path, "changed", "line-a")
+
+            self.assertEqual(
+                load_data_groups(project_path),
+                (DataGroup("line-a", "Line A", 0), DataGroup("line-b", "Line B", 1)),
+            )
+            self.assertEqual(
+                load_image_data_group_assignments(project_path),
+                (
+                    DataGroupAssignment("changed", "line-a"),
+                    DataGroupAssignment("available", "line-b"),
+                ),
+            )
+
     def test_scope_round_trips_and_only_reviewed_unchanged_sources_are_eligible(self):
         with TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)
