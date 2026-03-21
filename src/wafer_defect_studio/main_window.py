@@ -50,7 +50,11 @@ from .image_grid_placement import load_image_grid_placement, set_image_grid_orig
 from .review import ReviewError, load_review_state, mark_image_reviewed, reopen_image
 from .review_counts import ReviewCounts, load_review_counts
 from .training_scope_controls import SnapshotCreator, TrainingScopeControls
-from .training_scope import DataGroup
+from .training_scope import (
+    DataGroup,
+    load_data_groups,
+    load_image_data_group_assignments,
+)
 from .dataset_diagnostics import DatasetPreview
 from .evaluation_controls import DecisionService, EvaluationControls
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
@@ -389,6 +393,29 @@ class MainWindow(QMainWindow):
             self._on_image_inventory_selection_changed
         )
         data_layout.addWidget(self._image_inventory_table)
+        self._data_group_inventory_table = QTableWidget(0, 2, self._data_workspace)
+        self._data_group_inventory_table.setObjectName("dataGroupInventoryTable")
+        self._data_group_inventory_table.setAccessibleName("Data Group inventory")
+        self._data_group_inventory_table.setHorizontalHeaderLabels(
+            ("Data Group", "Assigned Images")
+        )
+        self._data_group_inventory_table.horizontalHeader().setAccessibleName(
+            "Data Group inventory columns"
+        )
+        self._data_group_inventory_table.verticalHeader().setAccessibleName(
+            "Data Group inventory rows"
+        )
+        self._data_group_inventory_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self._data_group_inventory_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._data_group_inventory_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self._data_group_inventory_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        data_layout.addWidget(self._data_group_inventory_table)
         self._data_groups_empty_state = QLabel(
             "No Data Groups configured.", self._data_workspace
         )
@@ -697,7 +724,44 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"Wafer Defect Studio — {project_info.path.name}")
         self.statusBar().showMessage(f"{status}: {project_info.path}")
         self._refresh_image_inventory(project_info.path)
+        self._refresh_data_group_inventory(project_info.path)
         self._remember_recent_project(project_info.path)
+
+    def _refresh_data_group_inventory(
+        self, project_path: str | Path | None = None
+    ) -> None:
+        """Render persisted Data Groups and assignment counts read-only."""
+
+        self._data_group_inventory_table.clearContents()
+        self._data_group_inventory_table.setRowCount(0)
+        resolved_path = (
+            Path(project_path).expanduser().resolve()
+            if project_path is not None
+            else self._active_project_path
+        )
+        if resolved_path is None:
+            self._data_groups_empty_state.setVisible(True)
+            return
+        try:
+            groups = load_data_groups(resolved_path)
+            assignments = load_image_data_group_assignments(resolved_path)
+        except Exception as error:
+            self._data_groups_empty_state.setVisible(True)
+            self.statusBar().showMessage(f"Data Group inventory unavailable: {error}")
+            return
+
+        counts = {group.data_group_id: 0 for group in groups}
+        for assignment in assignments:
+            if assignment.data_group_id in counts:
+                counts[assignment.data_group_id] += 1
+        self._data_group_inventory_table.setRowCount(len(groups))
+        for row, group in enumerate(groups):
+            group_item = QTableWidgetItem(f"{group.data_group_id}\n{group.name}")
+            group_item.setData(Qt.ItemDataRole.UserRole, group.data_group_id)
+            count_item = QTableWidgetItem(str(counts[group.data_group_id]))
+            self._data_group_inventory_table.setItem(row, 0, group_item)
+            self._data_group_inventory_table.setItem(row, 1, count_item)
+        self._data_groups_empty_state.setVisible(not groups)
 
     def _refresh_image_inventory(self, project_path: str | Path | None = None) -> None:
         """Render persisted image metadata without changing any source or project data."""
