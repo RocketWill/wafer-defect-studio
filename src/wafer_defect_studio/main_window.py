@@ -59,7 +59,7 @@ from .training_scope import (
     load_image_data_group_assignments,
     save_data_groups,
 )
-from .dataset_diagnostics import DatasetPreview
+from .dataset_diagnostics import DatasetPreview, preview_project_dataset
 from .evaluation_controls import DecisionService, EvaluationControls
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .proposal_controls import ProposalReviewControls, ReviewCallback
@@ -561,6 +561,9 @@ class MainWindow(QMainWindow):
         self._grid_origin_dock.setEnabled(False)
         self._grid_origin_dock.hide()
         self._training_scope_controls = TrainingScopeControls()
+        self._training_scope_controls.selectionChanged.connect(
+            self._refresh_dataset_preview
+        )
         self._training_scope_dock = QDockWidget("Dataset Snapshot", self)
         self._training_scope_dock.setObjectName("datasetSnapshotDock")
         self._training_scope_dock.setAllowedAreas(
@@ -1172,6 +1175,33 @@ class MainWindow(QMainWindow):
 
         self._training_scope_controls.configure(groups, classes, preview, creator)
         self._training_scope_dock.show()
+
+    def _refresh_dataset_preview(self) -> None:
+        """Refresh the project-bound Dataset preview after scope selection."""
+
+        if not self._training_scope_controls.project_bound_options:
+            return
+        if self._active_project_path is None:
+            return
+        groups = self._training_scope_controls.selected_data_groups()
+        classes = self._training_scope_controls.selected_classes()
+        if not groups or not classes:
+            self._training_scope_controls.show_preview_empty(
+                "Select at least one Data Group and Defect Class to preview eligibility."
+            )
+            return
+        try:
+            preview = preview_project_dataset(
+                self._active_project_path,
+                groups,
+                classes,
+            )
+        except Exception as error:
+            self._training_scope_controls.show_preview_empty(
+                f"Dataset preview unavailable: {error}"
+            )
+            return
+        self._training_scope_controls.show_preview(preview)
 
     def configure_training(
         self,

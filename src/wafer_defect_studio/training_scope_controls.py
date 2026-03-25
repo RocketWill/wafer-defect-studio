@@ -41,6 +41,8 @@ class _CreateTask(QRunnable):
 class TrainingScopeControls(QWidget):
     """Select snapshot inputs and run creation outside the GUI thread."""
 
+    selectionChanged = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._group_layout = QVBoxLayout()
@@ -48,6 +50,7 @@ class TrainingScopeControls(QWidget):
         self._group_boxes: dict[str, QCheckBox] = {}
         self._class_boxes: dict[str, QCheckBox] = {}
         self._creator: SnapshotCreator | None = None
+        self._project_bound_options = False
         self._tasks: set[_CreateTask] = set()
         self.warnings_label = QLabel("No preview available.", self)
         self.warnings_label.setObjectName("datasetWarningsLabel")
@@ -86,6 +89,7 @@ class TrainingScopeControls(QWidget):
         """Bind persisted project options without injecting a snapshot creator."""
 
         enabled_classes = tuple(item for item in classes if item.enabled)
+        self._project_bound_options = True
         self._replace_options(self._group_layout, self._group_boxes, groups, "dataGroup")
         self._replace_options(
             self._class_layout,
@@ -99,6 +103,34 @@ class TrainingScopeControls(QWidget):
         self.status_label.setText("Dataset options loaded. Select a Training Scope.")
         self.create_button.setEnabled(False)
 
+    def show_preview(self, preview: DatasetPreview) -> None:
+        """Render a project-bound preview while keeping creation disabled."""
+
+        self._show_warnings(preview)
+        image_distribution = ", ".join(
+            f"{name}: {count}" for name, count in preview.image_distribution
+        )
+        group_distribution = ", ".join(
+            f"{name}: {count}" for name, count in preview.group_distribution
+        )
+        class_distribution = ", ".join(
+            f"{name}: {count}" for name, count in preview.class_distribution
+        )
+        details = [f"Images — {image_distribution}"]
+        if group_distribution:
+            details.append(f"Groups — {group_distribution}")
+        if class_distribution:
+            details.append(f"Classes — {class_distribution}")
+        self.status_label.setText("Preview — " + " · ".join(details))
+        self.create_button.setEnabled(False)
+
+    def show_preview_empty(self, message: str) -> None:
+        """Show an actionable state when a preview cannot be calculated."""
+
+        self.warnings_label.setText(message)
+        self.status_label.setText("Select a Training Scope.")
+        self.create_button.setEnabled(False)
+
     def configure(
         self,
         groups: tuple[DataGroup, ...],
@@ -108,12 +140,19 @@ class TrainingScopeControls(QWidget):
     ) -> None:
         self._replace_options(self._group_layout, self._group_boxes, groups, "dataGroup")
         enabled_classes = tuple(item for item in classes if item.enabled)
+        self._project_bound_options = False
         self._replace_options(self._class_layout, self._class_boxes, enabled_classes, "snapshotClass")
         self._update_empty_states(groups, enabled_classes)
         self._creator = creator
         self._show_warnings(preview)
         self.status_label.setText("Select a Training Scope.")
         self.create_button.setEnabled(True)
+
+    @property
+    def project_bound_options(self) -> bool:
+        """Whether options came from the active project binding."""
+
+        return self._project_bound_options
 
     def set_selected_data_groups(self, identifiers: tuple[str, ...]) -> None:
         self._set_selected(self._group_boxes, identifiers)
@@ -165,8 +204,9 @@ class TrainingScopeControls(QWidget):
         self.group_empty_state.setVisible(not groups)
         self.class_empty_state.setVisible(not classes)
 
-    @staticmethod
-    def _replace_options(layout, boxes: dict[str, QCheckBox], values, prefix: str) -> None:
+    def _replace_options(
+        self, layout, boxes: dict[str, QCheckBox], values, prefix: str
+    ) -> None:
         while layout.count():
             widget = layout.takeAt(0).widget()
             if widget is not None:
@@ -176,6 +216,7 @@ class TrainingScopeControls(QWidget):
             identifier = value.data_group_id if isinstance(value, DataGroup) else value.code
             box = QCheckBox(value.name)
             box.setObjectName(f"{prefix}_{identifier}CheckBox")
+            box.toggled.connect(lambda _checked: self.selectionChanged.emit())
             boxes[identifier] = box
             layout.addWidget(box)
 

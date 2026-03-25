@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import math
+import json
+import sqlite3
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
+
+from .image_asset import SourceHealth, load_image_assets
+from .project import open_project
+from .review_counts import load_review_counts
+from .training_scope import load_image_data_group_assignments
 
 
 @dataclass(frozen=True)
@@ -37,6 +45,99 @@ class DatasetPreview:
     group_distribution: tuple[tuple[str, int], ...]
     warnings: tuple[DatasetWarning, ...]
     sampling: NormalSampling
+
+
+def preview_project_dataset(
+    project_path: str | Path,
+    selected_data_group_ids: tuple[str, ...],
+    selected_class_codes: tuple[str, ...],
+) -> DatasetPreview:
+    """Build a read-only preview from persisted project eligibility facts."""
+
+    if not selected_data_group_ids or not selected_class_codes:
+        raise ValueError("Select at least one Data Group and Defect Class.")
+    if len(set(selected_data_group_ids)) != len(selected_data_group_ids):
+        raise ValueError("selected_data_group_ids must be unique")
+    info = open_project(project_path)
+    assignments = load_image_data_group_assignments(info.path)
+    selected = set(selected_data_group_ids)
+    assets = {item.asset.image_asset_id: item for item in load_image_assets(info.path)}
+    database = info.path / "project.sqlite"
+    if info.schema_version < 9:
+        reviews: dict[str, bool] = {}
+    else:
+        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            reviews = {
+                row[0]: bool(row[1])
+                for row in connection.execute(
+                    "SELECT image_asset_id, reviewed FROM image_reviews"
+                )
+            }
+            annotation_rows = connection.execute(
+                "SELECT image_asset_id, class_codes_json FROM grid_annotations "
+                "ORDER BY image_asset_id, row, column"
+            ).fetchall()
+        finally:
+            connection.close()
+    if info.schema_version < 9:
+        annotation_rows = ()
+    class_codes_by_image: dict[str, list[str]] = {}
+    for image_id, encoded in annotation_rows:
+        try:
+            values = json.loads(encoded)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError("Invalid Grid Annotation metadata") from error
+        if not isinstance(values, list) or any(not isinstance(code, str) for code in values):
+            raise ValueError("Invalid Grid Annotation metadata")
+        class_codes_by_image.setdefault(image_id, []).extend(values)
+
+    images: list[PreviewImage] = []
+    unreviewed = 0
+    for assignment in assignments:
+        if assignment.data_group_id not in selected:
+            continue
+        reopened = assets.get(assignment.image_asset_id)
+        if reopened is None:
+            continue
+        reviewed = reviews.get(assignment.image_asset_id, False)
+        if not reviewed:
+            unreviewed += 1
+        source_valid = reopened.source_health is SourceHealth.AVAILABLE and reviewed
+        normal_count = 0
+        if source_valid:
+            try:
+                normal_count = load_review_counts(
+                    info.path, assignment.image_asset_id
+                ).derived_normal
+            except Exception:
+                normal_count = 0
+        images.append(
+            PreviewImage(
+                assignment.image_asset_id,
+                assignment.data_group_id,
+                tuple(class_codes_by_image.get(assignment.image_asset_id, ())),
+                normal_count,
+                source_valid,
+            )
+        )
+
+    preview = preview_dataset(selected_class_codes, tuple(images))
+    if not unreviewed:
+        return preview
+    warnings = preview.warnings + (
+        DatasetWarning(
+            "unreviewed-image",
+            f"Review {unreviewed} unreviewed Wafer Image(s) before including them in the Dataset Snapshot.",
+        ),
+    )
+    return DatasetPreview(
+        preview.image_distribution,
+        preview.class_distribution,
+        preview.group_distribution,
+        warnings,
+        preview.sampling,
+    )
 
 
 def preview_dataset(
