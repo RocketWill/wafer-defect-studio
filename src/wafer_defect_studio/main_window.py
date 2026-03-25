@@ -660,6 +660,7 @@ class MainWindow(QMainWindow):
         self._settings.sync()
         self.statusBar().showMessage(f"Workspace: {workspace}")
         self._data_workspace_dock.setVisible(workspace == self.WORKSPACES[0])
+        self._training_scope_dock.setVisible(workspace == "Dataset")
         self.workspaceChanged.emit(workspace)
 
     def _set_workspace_actions_enabled(self, has_project: bool) -> None:
@@ -745,6 +746,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{status}: {project_info.path}")
         self._refresh_image_inventory(project_info.path)
         self._refresh_data_group_inventory(project_info.path)
+        try:
+            dataset_groups = load_data_groups(project_info.path)
+            dataset_classes = load_defect_classes(project_info.path)
+        except Exception as error:
+            dataset_groups = ()
+            dataset_classes = ()
+            self.statusBar().showMessage(f"Dataset options unavailable: {error}")
+        self._training_scope_controls.set_available_options(
+            dataset_groups, dataset_classes
+        )
         self._remember_recent_project(project_info.path)
 
     def _refresh_data_group_inventory(

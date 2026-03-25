@@ -62,12 +62,42 @@ class TrainingScopeControls(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Data Groups", self))
         layout.addLayout(self._group_layout)
+        self.group_empty_state = QLabel("No Data Groups available.", self)
+        self.group_empty_state.setObjectName("datasetGroupsEmptyState")
+        self.group_empty_state.setWordWrap(True)
+        layout.addWidget(self.group_empty_state)
         layout.addWidget(QLabel("Defect Classes", self))
         layout.addLayout(self._class_layout)
+        self.class_empty_state = QLabel("No enabled Defect Classes available.", self)
+        self.class_empty_state.setObjectName("datasetClassesEmptyState")
+        self.class_empty_state.setWordWrap(True)
+        layout.addWidget(self.class_empty_state)
         layout.addWidget(QLabel("Warnings", self))
         layout.addWidget(self.warnings_label)
         layout.addWidget(self.status_label)
         layout.addWidget(self.create_button)
+        self._update_empty_states((), ())
+
+    def set_available_options(
+        self,
+        groups: tuple[DataGroup, ...],
+        classes: tuple[DefectClass, ...],
+    ) -> None:
+        """Bind persisted project options without injecting a snapshot creator."""
+
+        enabled_classes = tuple(item for item in classes if item.enabled)
+        self._replace_options(self._group_layout, self._group_boxes, groups, "dataGroup")
+        self._replace_options(
+            self._class_layout,
+            self._class_boxes,
+            enabled_classes,
+            "snapshotClass",
+        )
+        self._creator = None
+        self._update_empty_states(groups, enabled_classes)
+        self.warnings_label.setText("Select Data Groups and Defect Classes to preview eligibility.")
+        self.status_label.setText("Dataset options loaded. Select a Training Scope.")
+        self.create_button.setEnabled(False)
 
     def configure(
         self,
@@ -79,6 +109,7 @@ class TrainingScopeControls(QWidget):
         self._replace_options(self._group_layout, self._group_boxes, groups, "dataGroup")
         enabled_classes = tuple(item for item in classes if item.enabled)
         self._replace_options(self._class_layout, self._class_boxes, enabled_classes, "snapshotClass")
+        self._update_empty_states(groups, enabled_classes)
         self._creator = creator
         self._show_warnings(preview)
         self.status_label.setText("Select a Training Scope.")
@@ -129,6 +160,10 @@ class TrainingScopeControls(QWidget):
         self.warnings_label.setText(
             "\n".join(warning.message for warning in preview.warnings) or "No warnings."
         )
+
+    def _update_empty_states(self, groups, classes) -> None:
+        self.group_empty_state.setVisible(not groups)
+        self.class_empty_state.setVisible(not classes)
 
     @staticmethod
     def _replace_options(layout, boxes: dict[str, QCheckBox], values, prefix: str) -> None:
