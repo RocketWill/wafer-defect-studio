@@ -8,13 +8,21 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QTableWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QInputDialog,
+    QLabel,
+    QPushButton,
+    QTableWidget,
+)
 
 from wafer_defect_studio import image_asset, project
 from wafer_defect_studio.main_window import MainWindow
 from wafer_defect_studio.training_scope import (
     DataGroup,
     assign_image_to_data_group,
+    load_data_groups,
     save_data_groups,
 )
 
@@ -99,6 +107,57 @@ class DataWorkspaceGroupsTest(unittest.TestCase):
                 empty = window.findChild(QLabel, "dataGroupsEmptyState")
                 self.assertIsNotNone(empty)
                 self.assertFalse(empty.isVisible())
+
+                create_button = window.findChild(QPushButton, "createDataGroupButton")
+                self.assertIsNotNone(create_button)
+                self.assertEqual(create_button.accessibleName(), "Create Data Group")
+                self.assertTrue(create_button.isEnabled())
+
+                with patch.object(
+                    QInputDialog,
+                    "getText",
+                    side_effect=[("line-c", True), ("Line C", True)],
+                ):
+                    create_button.click()
+                self.assertEqual(
+                    load_data_groups(project_path),
+                    (
+                        DataGroup("line-a", "Line A", 0),
+                        DataGroup("line-b", "Line B", 1),
+                        DataGroup("line-c", "Line C", 2),
+                    ),
+                )
+                self.assertEqual(inventory.rowCount(), 3)
+                self.assertEqual(inventory.item(2, 0).text(), "line-c\nLine C")
+                self.assertEqual(inventory.item(2, 1).text(), "0")
+                self.assertFalse(empty.isVisible())
+                self.assertIn("created", window.statusBar().currentMessage())
+
+                groups_before_duplicate = load_data_groups(project_path)
+                with patch.object(
+                    QInputDialog,
+                    "getText",
+                    side_effect=[("line-a", True), ("Another name", True)],
+                ):
+                    create_button.click()
+                self.assertEqual(load_data_groups(project_path), groups_before_duplicate)
+                self.assertIn("already exists", window.statusBar().currentMessage())
+
+                with patch.object(
+                    QInputDialog,
+                    "getText",
+                    return_value=("", False),
+                ):
+                    create_button.click()
+                self.assertIn("cancelled", window.statusBar().currentMessage())
+
+                with patch.object(
+                    QInputDialog,
+                    "getText",
+                    return_value=("   ", True),
+                ):
+                    create_button.click()
+                self.assertIn("ID", window.statusBar().currentMessage())
             finally:
                 window.close()
                 window.deleteLater()

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QInputDialog,
     QPushButton,
     QToolBar,
     QTableWidget,
@@ -52,8 +53,10 @@ from .review_counts import ReviewCounts, load_review_counts
 from .training_scope_controls import SnapshotCreator, TrainingScopeControls
 from .training_scope import (
     DataGroup,
+    ensure_data_group_schema,
     load_data_groups,
     load_image_data_group_assignments,
+    save_data_groups,
 )
 from .dataset_diagnostics import DatasetPreview
 from .evaluation_controls import DecisionService, EvaluationControls
@@ -367,6 +370,12 @@ class MainWindow(QMainWindow):
         self._data_workspace_context_label.setObjectName("dataWorkspaceContextLabel")
         self._data_workspace_context_label.setWordWrap(True)
         data_layout.addWidget(self._data_workspace_context_label)
+        self._create_data_group_button = QPushButton("Create Data Group…", self._data_workspace)
+        self._create_data_group_button.setObjectName("createDataGroupButton")
+        self._create_data_group_button.setAccessibleName("Create Data Group")
+        self._create_data_group_button.setEnabled(False)
+        self._create_data_group_button.clicked.connect(self._create_data_group)
+        data_layout.addWidget(self._create_data_group_button)
         self._image_inventory_table = QTableWidget(0, 5, self._data_workspace)
         self._image_inventory_table.setObjectName("imageInventoryTable")
         self._image_inventory_table.setAccessibleName("Wafer Image inventory")
@@ -715,6 +724,7 @@ class MainWindow(QMainWindow):
         self._settings.sync()
         self._set_workspace_actions_enabled(True)
         self.import_wafer_image_action.setEnabled(True)
+        self._create_data_group_button.setEnabled(True)
         self._data_workspace_context_label.setText(
             f"Project: {project_info.path}. Registered Wafer Images will appear here."
         )
@@ -762,6 +772,59 @@ class MainWindow(QMainWindow):
             self._data_group_inventory_table.setItem(row, 0, group_item)
             self._data_group_inventory_table.setItem(row, 1, count_item)
         self._data_groups_empty_state.setVisible(not groups)
+
+    def _create_data_group(self) -> None:
+        """Prompt for and persist one new Data Group without other mutations."""
+
+        if self._active_project_path is None:
+            self.statusBar().showMessage("Create Data Group unavailable: no active project.")
+            return
+        data_group_id, accepted = QInputDialog.getText(
+            self,
+            "Create Data Group",
+            "Data Group ID:",
+        )
+        if not accepted:
+            self.statusBar().showMessage("Create Data Group cancelled.")
+            return
+        normalized_id = data_group_id.strip()
+        if not normalized_id:
+            self.statusBar().showMessage("Data Group ID must not be empty.")
+            return
+        data_group_name, accepted = QInputDialog.getText(
+            self,
+            "Create Data Group",
+            "Data Group name:",
+        )
+        if not accepted:
+            self.statusBar().showMessage("Create Data Group cancelled.")
+            return
+        normalized_name = data_group_name.strip()
+        if not normalized_name:
+            self.statusBar().showMessage("Data Group name must not be empty.")
+            return
+
+        try:
+            existing = load_data_groups(self._active_project_path)
+        except Exception as error:
+            self.statusBar().showMessage(f"Unable to create Data Group: {error}")
+            return
+        if any(group.data_group_id == normalized_id for group in existing):
+            self.statusBar().showMessage(
+                f"Data Group already exists: {normalized_id}."
+            )
+            return
+
+        next_order = max((group.order for group in existing), default=-1) + 1
+        candidate = DataGroup(normalized_id, normalized_name, next_order)
+        try:
+            ensure_data_group_schema(self._active_project_path)
+            save_data_groups(self._active_project_path, (candidate,))
+        except Exception as error:
+            self.statusBar().showMessage(f"Unable to create Data Group: {error}")
+            return
+        self._refresh_data_group_inventory(self._active_project_path)
+        self.statusBar().showMessage(f"Data Group created: {normalized_id}.")
 
     def _refresh_image_inventory(self, project_path: str | Path | None = None) -> None:
         """Render persisted image metadata without changing any source or project data."""
