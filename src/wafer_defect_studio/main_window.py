@@ -53,6 +53,7 @@ from .review_counts import ReviewCounts, load_review_counts
 from .training_scope_controls import SnapshotCreator, TrainingScopeControls
 from .training_scope import (
     DataGroup,
+    assign_image_to_data_group,
     ensure_data_group_schema,
     load_data_groups,
     load_image_data_group_assignments,
@@ -425,6 +426,14 @@ class MainWindow(QMainWindow):
         )
         self._data_group_inventory_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         data_layout.addWidget(self._data_group_inventory_table)
+        self._assign_data_group_button = QPushButton(
+            "Assign Data Group", self._data_workspace
+        )
+        self._assign_data_group_button.setObjectName("assignDataGroupButton")
+        self._assign_data_group_button.setAccessibleName("Assign Data Group")
+        self._assign_data_group_button.setEnabled(False)
+        self._assign_data_group_button.clicked.connect(self._assign_data_group)
+        data_layout.addWidget(self._assign_data_group_button)
         self._data_groups_empty_state = QLabel(
             "No Data Groups configured.", self._data_workspace
         )
@@ -725,6 +734,7 @@ class MainWindow(QMainWindow):
         self._set_workspace_actions_enabled(True)
         self.import_wafer_image_action.setEnabled(True)
         self._create_data_group_button.setEnabled(True)
+        self._assign_data_group_button.setEnabled(True)
         self._data_workspace_context_label.setText(
             f"Project: {project_info.path}. Registered Wafer Images will appear here."
         )
@@ -772,6 +782,48 @@ class MainWindow(QMainWindow):
             self._data_group_inventory_table.setItem(row, 0, group_item)
             self._data_group_inventory_table.setItem(row, 1, count_item)
         self._data_groups_empty_state.setVisible(not groups)
+
+    def _assign_data_group(self) -> None:
+        """Assign the selected Wafer Image to the selected Data Group."""
+
+        if self._active_project_path is None:
+            self.statusBar().showMessage("Assign Data Group unavailable: no active project.")
+            return
+        image_asset_id = self._selected_table_value(self._image_inventory_table)
+        data_group_id = self._selected_table_value(self._data_group_inventory_table)
+        if not image_asset_id and not data_group_id:
+            self.statusBar().showMessage(
+                "Select a Wafer Image and Data Group before assigning."
+            )
+            return
+        if not image_asset_id:
+            self.statusBar().showMessage("Select a Wafer Image before assigning.")
+            return
+        if not data_group_id:
+            self.statusBar().showMessage("Select a Data Group before assigning.")
+            return
+        try:
+            assign_image_to_data_group(
+                self._active_project_path,
+                str(image_asset_id),
+                str(data_group_id),
+            )
+        except Exception as error:
+            self.statusBar().showMessage(f"Unable to assign Data Group: {error}")
+            return
+        self._refresh_image_inventory(self._active_project_path)
+        self._refresh_data_group_inventory(self._active_project_path)
+        self.statusBar().showMessage(f"Data Group assigned: {data_group_id}.")
+
+    @staticmethod
+    def _selected_table_value(table: QTableWidget) -> object | None:
+        row = table.currentRow()
+        if row < 0:
+            return None
+        item = table.item(row, 0)
+        if item is None:
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
 
     def _create_data_group(self) -> None:
         """Prompt for and persist one new Data Group without other mutations."""
@@ -844,6 +896,20 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Image inventory unavailable: {error}")
             return
 
+        data_group_labels: dict[str, str] = {}
+        try:
+            groups = load_data_groups(resolved_path)
+            group_names = {group.data_group_id: group.name for group in groups}
+            data_group_labels = {
+                assignment.image_asset_id: (
+                    f"{assignment.data_group_id}\n{group_names[assignment.data_group_id]}"
+                )
+                for assignment in load_image_data_group_assignments(resolved_path)
+                if assignment.data_group_id in group_names
+            }
+        except Exception:
+            data_group_labels = {}
+
         self._image_inventory_table.setRowCount(len(reopened_assets))
         health_labels = {
             SourceHealth.AVAILABLE: "Available",
@@ -862,7 +928,7 @@ class MainWindow(QMainWindow):
                     + (" — Lossy source" if asset.lossy_source else "")
                 ),
                 QTableWidgetItem(health_labels[reopened.source_health]),
-                QTableWidgetItem(""),
+                QTableWidgetItem(data_group_labels.get(asset.image_asset_id, "")),
             )
             for column, item in enumerate(values):
                 self._image_inventory_table.setItem(row, column, item)
