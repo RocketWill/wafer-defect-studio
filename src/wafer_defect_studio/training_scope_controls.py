@@ -122,13 +122,23 @@ class TrainingScopeControls(QWidget):
         if class_distribution:
             details.append(f"Classes — {class_distribution}")
         self.status_label.setText("Preview — " + " · ".join(details))
-        self.create_button.setEnabled(False)
+        self.create_button.setEnabled(
+            self._creator is not None
+            and bool(self.selected_data_groups())
+            and bool(self.selected_classes())
+        )
 
     def show_preview_empty(self, message: str) -> None:
         """Show an actionable state when a preview cannot be calculated."""
 
         self.warnings_label.setText(message)
         self.status_label.setText("Select a Training Scope.")
+        self.create_button.setEnabled(False)
+
+    def set_snapshot_creator(self, creator: SnapshotCreator) -> None:
+        """Attach the active project's asynchronous snapshot creator."""
+
+        self._creator = creator
         self.create_button.setEnabled(False)
 
     def configure(

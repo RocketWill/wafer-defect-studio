@@ -77,7 +77,7 @@ class DatasetSnapshotProjectPreviewTest(unittest.TestCase):
                 self.assertIn("invalid: 3", status.text())
                 self.assertIn("Groups — line-a: 1", status.text())
                 self.assertIn("Classes — scratch: 1", status.text())
-                self.assertFalse(
+                self.assertTrue(
                     window.findChild(QPushButton, "createDatasetSnapshotButton").isEnabled()
                 )
                 self.assertEqual(database.read_bytes(), database_bytes)

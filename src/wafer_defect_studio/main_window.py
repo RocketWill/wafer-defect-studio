@@ -60,6 +60,7 @@ from .training_scope import (
     save_data_groups,
 )
 from .dataset_diagnostics import DatasetPreview, preview_project_dataset
+from .dataset_workflow import create_project_dataset_snapshot
 from .evaluation_controls import DecisionService, EvaluationControls
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .proposal_controls import ProposalReviewControls, ReviewCallback
@@ -758,6 +759,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Dataset options unavailable: {error}")
         self._training_scope_controls.set_available_options(
             dataset_groups, dataset_classes
+        )
+        self._training_scope_controls.set_snapshot_creator(
+            lambda groups, classes, path=project_info.path: create_project_dataset_snapshot(
+                path, groups, classes
+            )
         )
         self._remember_recent_project(project_info.path)
 
