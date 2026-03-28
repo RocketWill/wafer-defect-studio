@@ -75,6 +75,7 @@ from . import image_asset
 from . import project
 from .ui_theme import ThemeMode, apply_theme
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
+from .training_inputs import TrainingInputControls, TrainingInputInventory, load_training_input_inventory
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
 
@@ -578,12 +579,17 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._training_scope_dock)
         self._training_scope_dock.hide()
         self._training_controls = TrainingControls()
+        self._training_input_controls = TrainingInputControls()
+        training_workspace = QWidget(self)
+        training_layout = QVBoxLayout(training_workspace)
+        training_layout.addWidget(self._training_input_controls)
+        training_layout.addWidget(self._training_controls)
         self._training_dock = QDockWidget("Training", self)
         self._training_dock.setObjectName("trainingDock")
         self._training_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
         )
-        self._training_dock.setWidget(self._training_controls)
+        self._training_dock.setWidget(training_workspace)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._training_dock)
         self._training_dock.hide()
         self._evaluation_controls = EvaluationControls()
@@ -669,6 +675,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Workspace: {workspace}")
         self._data_workspace_dock.setVisible(workspace == self.WORKSPACES[0])
         self._training_scope_dock.setVisible(workspace == "Dataset")
+        self._training_dock.setVisible(workspace == "Train")
         self.workspaceChanged.emit(workspace)
 
     def _set_workspace_actions_enabled(self, has_project: bool) -> None:
@@ -754,6 +761,12 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{status}: {project_info.path}")
         self._refresh_image_inventory(project_info.path)
         self._refresh_data_group_inventory(project_info.path)
+        try:
+            training_inputs = load_training_input_inventory(project_info.path)
+        except Exception as error:
+            training_inputs = TrainingInputInventory((), ())
+            self.statusBar().showMessage(f"Training inputs unavailable: {error}")
+        self._training_input_controls.set_inventory(training_inputs)
         try:
             dataset_groups = load_data_groups(project_info.path)
             dataset_classes = load_defect_classes(project_info.path)
