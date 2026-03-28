@@ -42,6 +42,7 @@ class TrainingScopeControls(QWidget):
     """Select snapshot inputs and run creation outside the GUI thread."""
 
     selectionChanged = Signal()
+    snapshotCreated = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -199,6 +200,7 @@ class TrainingScopeControls(QWidget):
         distribution = ", ".join(f"{name}: {count}" for name, count in preview.image_distribution)
         self.status_label.setText(f"Created {snapshot_id} — {distribution}")
         self.create_button.setEnabled(True)
+        self.snapshotCreated.emit(str(snapshot_id))
 
     def _failed(self, task: _CreateTask, message: str) -> None:
         self._tasks.discard(task)

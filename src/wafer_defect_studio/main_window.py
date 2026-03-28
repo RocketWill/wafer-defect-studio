@@ -61,6 +61,7 @@ from .training_scope import (
 )
 from .dataset_diagnostics import DatasetPreview, preview_project_dataset
 from .dataset_workflow import create_project_dataset_snapshot
+from .dataset_snapshot import load_dataset_snapshot
 from .evaluation_controls import DecisionService, EvaluationControls
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .proposal_controls import ProposalReviewControls, ReviewCallback
@@ -565,6 +566,9 @@ class MainWindow(QMainWindow):
         self._training_scope_controls.selectionChanged.connect(
             self._refresh_dataset_preview
         )
+        self._training_scope_controls.snapshotCreated.connect(
+            self._on_dataset_snapshot_created
+        )
         self._training_scope_dock = QDockWidget("Dataset Snapshot", self)
         self._training_scope_dock.setObjectName("datasetSnapshotDock")
         self._training_scope_dock.setAllowedAreas(
@@ -765,7 +769,70 @@ class MainWindow(QMainWindow):
                 path, groups, classes
             )
         )
+        self._restore_dataset_context(project_info)
         self._remember_recent_project(project_info.path)
+
+    @staticmethod
+    def _dataset_context_key(project_info, field: str) -> str:
+        return f"datasetContext/{project_info.project_id}/{field}"
+
+    @staticmethod
+    def _settings_values(value: object) -> tuple[str, ...]:
+        if isinstance(value, str):
+            return (value,) if value else ()
+        if isinstance(value, (list, tuple)):
+            return tuple(str(item) for item in value if str(item))
+        return ()
+
+    def _save_dataset_context(self, snapshot_id: str | None = None) -> None:
+        if self._active_project_path is None:
+            return
+        try:
+            project_info = project.open_project(self._active_project_path)
+        except Exception:
+            return
+        self._settings.setValue(
+            self._dataset_context_key(project_info, "dataGroupIds"),
+            list(self._training_scope_controls.selected_data_groups()),
+        )
+        self._settings.setValue(
+            self._dataset_context_key(project_info, "classCodes"),
+            list(self._training_scope_controls.selected_classes()),
+        )
+        if snapshot_id is not None:
+            self._settings.setValue(
+                self._dataset_context_key(project_info, "snapshotId"),
+                snapshot_id,
+            )
+        self._settings.sync()
+
+    def _on_dataset_snapshot_created(self, snapshot_id: str) -> None:
+        if not self._training_scope_controls.project_bound_options:
+            return
+        self._save_dataset_context(snapshot_id)
+        self.statusBar().showMessage(f"Created snapshot: {snapshot_id}")
+
+    def _restore_dataset_context(self, project_info) -> None:
+        groups = self._settings_values(
+            self._settings.value(self._dataset_context_key(project_info, "dataGroupIds"))
+        )
+        classes = self._settings_values(
+            self._settings.value(self._dataset_context_key(project_info, "classCodes"))
+        )
+        self._training_scope_controls.set_selected_data_groups(groups)
+        self._training_scope_controls.set_selected_classes(classes)
+        snapshot_id = str(
+            self._settings.value(self._dataset_context_key(project_info, "snapshotId"), "")
+            or ""
+        )
+        if not snapshot_id:
+            return
+        try:
+            load_dataset_snapshot(project_info.path, snapshot_id)
+        except Exception:
+            self.statusBar().showMessage(f"Snapshot unavailable: {snapshot_id}")
+            return
+        self.statusBar().showMessage(f"Restored snapshot: {snapshot_id}")
 
     def _refresh_data_group_inventory(
         self, project_path: str | Path | None = None
@@ -1027,6 +1094,7 @@ class MainWindow(QMainWindow):
         saved_workspace = self._settings.value(self._CURRENT_WORKSPACE_KEY)
         if saved_workspace in self.workspace_actions and saved_workspace != self._current_workspace:
             self._set_workspace(str(saved_workspace))
+            self._restore_dataset_context(project_info)
 
         if project_info.schema_version >= project._JOB_SCHEMA_VERSION:
             self.configure_jobs_for_project(
@@ -1191,6 +1259,7 @@ class MainWindow(QMainWindow):
             return
         groups = self._training_scope_controls.selected_data_groups()
         classes = self._training_scope_controls.selected_classes()
+        self._save_dataset_context()
         if not groups or not classes:
             self._training_scope_controls.show_preview_empty(
                 "Select at least one Data Group and Defect Class to preview eligibility."
