@@ -75,6 +75,7 @@ from . import image_asset
 from . import project
 from .ui_theme import ThemeMode, apply_theme
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
+from .training_configuration_controls import TrainingConfigurationControls
 from .training_inputs import TrainingInputControls, TrainingInputInventory, load_training_input_inventory
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -580,9 +581,13 @@ class MainWindow(QMainWindow):
         self._training_scope_dock.hide()
         self._training_controls = TrainingControls()
         self._training_input_controls = TrainingInputControls()
+        self._training_configuration_controls = TrainingConfigurationControls(
+            self._training_input_controls
+        )
         training_workspace = QWidget(self)
         training_layout = QVBoxLayout(training_workspace)
         training_layout.addWidget(self._training_input_controls)
+        training_layout.addWidget(self._training_configuration_controls)
         training_layout.addWidget(self._training_controls)
         self._training_dock = QDockWidget("Training", self)
         self._training_dock.setObjectName("trainingDock")

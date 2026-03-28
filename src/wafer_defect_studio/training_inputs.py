@@ -6,6 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QLabel, QFormLayout, QWidget
 
 from .dataset_snapshot import load_dataset_snapshot
@@ -18,6 +19,8 @@ class TrainingInputOption:
     identifier: str
     label: str
     available: bool = True
+    class_count: int | None = None
+    snapshot_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,9 @@ def load_training_input_inventory(project_path: str | Path) -> TrainingInputInve
                 TrainingInputOption(
                     snapshot_id,
                     f"Snapshot {snapshot_id} — {snapshot.created_at}",
+                    True,
+                    len(snapshot.classes),
+                    snapshot_id,
                 )
             )
 
@@ -90,6 +96,9 @@ def load_training_input_inventory(project_path: str | Path) -> TrainingInputInve
                 TrainingInputOption(
                     split_id,
                     f"Split {split_id} — seed {split.seed}",
+                    True,
+                    None,
+                    split.snapshot_id,
                 )
             )
     snapshots.sort(key=lambda option: (not option.available, option.identifier))
@@ -129,6 +138,7 @@ class TrainingInputControls(QWidget):
             item = combo.model().item(combo.count() - 1)
             if item is not None:
                 item.setEnabled(option.available)
+            combo.setItemData(combo.count() - 1, option, Qt.UserRole + 1)
 
 
 __all__ = [
