@@ -65,6 +65,7 @@ from .dataset_workflow import create_project_dataset_snapshot
 from .dataset_snapshot import load_dataset_snapshot
 from .evaluation_controls import DecisionService, EvaluationControls
 from .evaluation_inputs import EvaluationInputControls, EvaluationInputInventory, load_evaluation_input_inventory
+from .evaluation_run import load_evaluation, load_evaluation_decisions
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
@@ -620,6 +621,9 @@ class MainWindow(QMainWindow):
         self._training_dock.hide()
         self._evaluation_controls = EvaluationControls()
         self._evaluation_input_controls = EvaluationInputControls()
+        self._evaluation_input_controls.combo.currentIndexChanged.connect(
+            self._on_project_evaluation_changed
+        )
         evaluation_workspace = QWidget(self)
         evaluation_layout = QVBoxLayout(evaluation_workspace)
         evaluation_layout.addWidget(self._evaluation_input_controls)
@@ -1539,6 +1543,24 @@ class MainWindow(QMainWindow):
         self._training_dock.setEnabled(True)
         self._training_controls.start_button.setEnabled(self._training_context_ready)
         self._training_dock.setVisible(self._current_workspace == "Train")
+
+    def _on_project_evaluation_changed(self, _index: int) -> None:
+        evaluation_id = self._evaluation_input_controls.combo.currentData()
+        if self._active_project_path is None or not evaluation_id:
+            self._evaluation_controls.clear()
+            return
+        try:
+            evaluation = load_evaluation(self._active_project_path, str(evaluation_id))
+            decisions = load_evaluation_decisions(
+                self._active_project_path, str(evaluation_id)
+            )
+        except Exception as error:
+            self._evaluation_controls.clear()
+            self._evaluation_input_controls.status_label.setText(
+                f"Unavailable Evaluation: {evaluation_id} — {error}"
+            )
+            return
+        self._evaluation_controls.configure(evaluation, decisions)
 
     def configure_evaluation(
         self,

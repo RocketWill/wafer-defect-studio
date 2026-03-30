@@ -214,6 +214,19 @@ class EvaluationControls(QWidget):
         self._decisions = list(decisions)
         self._render_history()
 
+    def clear(self) -> None:
+        """Remove the selected Evaluation detail without touching persistence."""
+
+        self._evaluation = None
+        self._decisions = []
+        self._decision_service = None
+        self.evaluation_id_label.setText("Evaluation: —")
+        self.macro_f1_label.setText("Macro F1: —")
+        self.target_status_label.setText("Minimum-recall target: —")
+        self.metrics_table.setRowCount(0)
+        self.history_table.setRowCount(0)
+        self._refresh_approval_enabled()
+
     def validate_evaluation(self) -> None:
         """Request one append-only Validated decision through the injected service."""
 
