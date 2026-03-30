@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import QPoint, QSettings, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup
@@ -77,6 +78,9 @@ from .ui_theme import ThemeMode, apply_theme
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .training_configuration_controls import TrainingConfigurationControls
 from .training_inputs import TrainingInputControls, TrainingInputInventory, load_training_input_inventory
+from .training_protocol import TerminalMessage, TrainingRequest
+from .training_run import RunConfig, create_training_run, update_training_run_terminal
+from .training_worker import start_training_worker
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
 
@@ -788,6 +792,7 @@ class MainWindow(QMainWindow):
             )
         )
         self._restore_dataset_context(project_info)
+        self.configure_project_training()
         self._remember_recent_project(project_info.path)
 
     @staticmethod
@@ -1312,6 +1317,73 @@ class MainWindow(QMainWindow):
         )
         self._training_dock.setEnabled(True)
         self._training_dock.show()
+
+    def configure_project_training(
+        self,
+        *,
+        launcher: TrainingLauncher | None = None,
+    ) -> None:
+        """Bind Train to the active project and persist its run lifecycle."""
+
+        project_path = self._active_project_path
+        if project_path is None:
+            self._training_controls.status_label.setText("Status: Open a project first")
+            return
+
+        def request_source() -> TrainingRequest:
+            run_id = str(uuid4())
+            provisional_staging = project_path / "runs" / ".staging" / run_id
+            request = self._training_configuration_controls.build_request(
+                run_id, provisional_staging
+            )
+            run_config = RunConfig(
+                snapshot_id=request.config.snapshot_id,
+                split_id=request.config.split_id,
+                class_count=request.config.class_count,
+                epochs=request.config.epochs,
+                batch_size=request.config.batch_size,
+                device=request.config.device,
+                seed=request.config.seed,
+                learning_rate=request.config.learning_rate,
+                weights_policy=request.config.weights_policy,
+            )
+            run = create_training_run(project_path, run_config, run_id=run_id)
+            update_training_run_terminal(
+                project_path, run.run_id, "running", message="Training started."
+            )
+            return TrainingRequest(run.run_id, request.config, run.staging_path)
+
+        worker_launcher = launcher or start_training_worker
+
+        def project_launcher(request: TrainingRequest):
+            try:
+                return worker_launcher(request)
+            except Exception as error:
+                update_training_run_terminal(
+                    project_path,
+                    request.request_id,
+                    "failed",
+                    message=str(error),
+                )
+                raise
+
+        def terminal_callback(message: TerminalMessage) -> None:
+            update_training_run_terminal(
+                project_path,
+                message.request_id,
+                message.status,
+                message=message.message,
+                error_code=message.error_code,
+                staging_path=message.artifact_staging_path,
+            )
+
+        self._training_controls.configure(
+            request_source,
+            launcher=project_launcher,
+            terminal_callback=terminal_callback,
+        )
+        self._training_dock.setEnabled(True)
+        self._training_dock.setVisible(self._current_workspace == "Train")
 
     def configure_evaluation(
         self,

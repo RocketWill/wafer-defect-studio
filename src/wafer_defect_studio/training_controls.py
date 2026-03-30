@@ -16,6 +16,7 @@ from .training_worker import start_training_worker
 TrainingRequestSource = TrainingRequest | Callable[[], TrainingRequest]
 TrainingLauncher = Callable[[TrainingRequest], Any]
 CloneCallback = Callable[[], Any]
+TerminalCallback = Callable[[TerminalMessage], Any]
 
 
 class TrainingControls(QWidget):
@@ -26,6 +27,7 @@ class TrainingControls(QWidget):
         self._request_source: TrainingRequestSource | None = None
         self._launcher: TrainingLauncher = start_training_worker
         self._clone_callback: CloneCallback | None = None
+        self._terminal_callback: TerminalCallback | None = None
         self._handle: Any | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -82,6 +84,7 @@ class TrainingControls(QWidget):
         *,
         launcher: TrainingLauncher | None = None,
         clone_callback: CloneCallback | None = None,
+        terminal_callback: TerminalCallback | None = None,
     ) -> None:
         """Bind a request and service actions; no database handle crosses this boundary."""
 
@@ -90,6 +93,7 @@ class TrainingControls(QWidget):
         self._request_source = request
         self._launcher = launcher or start_training_worker
         self._clone_callback = clone_callback
+        self._terminal_callback = terminal_callback
         self._handle = None
         self._timer.stop()
         self.start_button.setEnabled(True)
@@ -206,6 +210,12 @@ class TrainingControls(QWidget):
         )
 
     def _finish_message(self, message: TerminalMessage) -> None:
+        if self._terminal_callback is not None:
+            try:
+                self._terminal_callback(message)
+            except Exception as error:
+                self._finish("failed", f"Failed to persist terminal status — {error}")
+                return
         self._finish(message.status, message.message, message.error_code)
 
     def _finish(self, status: str, detail: str, error_code: str | None = None) -> None:
