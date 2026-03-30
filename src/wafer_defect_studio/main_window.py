@@ -588,6 +588,22 @@ class MainWindow(QMainWindow):
         self._training_configuration_controls = TrainingConfigurationControls(
             self._training_input_controls
         )
+        self._training_context_restoring = False
+        self._training_context_ready = True
+        for widget in (
+            self._training_input_controls.snapshot_combo,
+            self._training_input_controls.split_combo,
+            self._training_configuration_controls.device_combo,
+            self._training_configuration_controls.weights_combo,
+        ):
+            widget.currentIndexChanged.connect(self._on_training_context_changed)
+        for widget in (
+            self._training_configuration_controls.epochs_spin,
+            self._training_configuration_controls.batch_size_spin,
+            self._training_configuration_controls.learning_rate_spin,
+            self._training_configuration_controls.seed_spin,
+        ):
+            widget.valueChanged.connect(self._on_training_context_changed)
         training_workspace = QWidget(self)
         training_layout = QVBoxLayout(training_workspace)
         training_layout.addWidget(self._training_input_controls)
@@ -775,6 +791,7 @@ class MainWindow(QMainWindow):
         except Exception as error:
             training_inputs = TrainingInputInventory((), ())
             self.statusBar().showMessage(f"Training inputs unavailable: {error}")
+        self._training_context_restoring = True
         self._training_input_controls.set_inventory(training_inputs)
         try:
             dataset_groups = load_data_groups(project_info.path)
@@ -792,6 +809,8 @@ class MainWindow(QMainWindow):
             )
         )
         self._restore_dataset_context(project_info)
+        self._restore_training_context(project_info)
+        self._training_context_restoring = False
         self.configure_project_training()
         self._remember_recent_project(project_info.path)
 
@@ -856,6 +875,126 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Snapshot unavailable: {snapshot_id}")
             return
         self.statusBar().showMessage(f"Restored snapshot: {snapshot_id}")
+
+    @staticmethod
+    def _training_context_key(project_info, field: str) -> str:
+        return f"trainingContext/{project_info.project_id}/{field}"
+
+    def _save_training_context(self) -> None:
+        if self._active_project_path is None or self._training_context_restoring:
+            return
+        try:
+            project_info = project.open_project(self._active_project_path)
+        except Exception:
+            return
+        controls = self._training_input_controls
+        config = self._training_configuration_controls
+        values = {
+            "snapshotId": controls.snapshot_combo.currentData() or "",
+            "splitId": controls.split_combo.currentData() or "",
+            "epochs": config.epochs_spin.value(),
+            "batchSize": config.batch_size_spin.value(),
+            "learningRate": config.learning_rate_spin.value(),
+            "seed": config.seed_spin.value(),
+            "device": config.device_combo.currentText(),
+            "weightsPolicy": config.weights_combo.currentText(),
+        }
+        for field, value in values.items():
+            self._settings.setValue(self._training_context_key(project_info, field), value)
+        self._settings.sync()
+
+    def _on_training_context_changed(self, *_args) -> None:
+        if self._training_context_restoring:
+            return
+        error = self._training_configuration_controls.context_error()
+        self._training_context_ready = error is None
+        self._training_configuration_controls.set_context_status(
+            "Training context ready." if error is None else error,
+            self._training_context_ready,
+        )
+        self._save_training_context()
+        if not self._training_controls.cancel_button.isEnabled():
+            self._training_controls.start_button.setEnabled(self._training_context_ready)
+
+    def _restore_training_context(self, project_info) -> None:
+        controls = self._training_input_controls
+        config = self._training_configuration_controls
+        previous_restoring = self._training_context_restoring
+        self._training_context_restoring = True
+        try:
+            snapshot_id = str(
+                self._settings.value(self._training_context_key(project_info, "snapshotId"), "")
+                or ""
+            )
+            split_id = str(
+                self._settings.value(self._training_context_key(project_info, "splitId"), "")
+                or ""
+            )
+            if snapshot_id:
+                index = controls.snapshot_combo.findData(snapshot_id)
+                if index >= 0:
+                    option = controls.snapshot_combo.itemData(index, Qt.UserRole + 1)
+                    if getattr(option, "available", False):
+                        controls.snapshot_combo.setCurrentIndex(index)
+            if split_id:
+                index = controls.split_combo.findData(split_id)
+                if index >= 0:
+                    option = controls.split_combo.itemData(index, Qt.UserRole + 1)
+                    if getattr(option, "available", False):
+                        controls.split_combo.setCurrentIndex(index)
+            for widget, field, caster in (
+                (config.epochs_spin, "epochs", int),
+                (config.batch_size_spin, "batchSize", int),
+                (config.learning_rate_spin, "learningRate", float),
+                (config.seed_spin, "seed", int),
+            ):
+                value = self._settings.value(
+                    self._training_context_key(project_info, field), None
+                )
+                if value is not None:
+                    try:
+                        widget.setValue(caster(value))
+                    except (TypeError, ValueError):
+                        pass
+            for widget, field in (
+                (config.device_combo, "device"),
+                (config.weights_combo, "weightsPolicy"),
+            ):
+                value = str(
+                    self._settings.value(self._training_context_key(project_info, field), "")
+                    or ""
+                )
+                index = widget.findText(value)
+                if index >= 0:
+                    widget.setCurrentIndex(index)
+        finally:
+            self._training_context_restoring = previous_restoring
+
+        snapshot_index = controls.snapshot_combo.findData(snapshot_id) if snapshot_id else -1
+        split_index = controls.split_combo.findData(split_id) if split_id else -1
+        snapshot_unavailable = snapshot_index < 0 or not getattr(
+            controls.snapshot_combo.itemData(snapshot_index, Qt.UserRole + 1),
+            "available",
+            False,
+        )
+        split_unavailable = split_index < 0 or not getattr(
+            controls.split_combo.itemData(split_index, Qt.UserRole + 1),
+            "available",
+            False,
+        )
+        missing = ""
+        if snapshot_id and snapshot_unavailable:
+            missing = f"Snapshot unavailable: {snapshot_id}"
+        elif split_id and split_unavailable:
+            missing = f"Split unavailable: {split_id}"
+        error = missing or config.context_error()
+        self._training_context_ready = error is None
+        config.set_context_status(
+            "Training context ready." if error is None else error,
+            self._training_context_ready,
+        )
+        if not self._training_controls.cancel_button.isEnabled():
+            self._training_controls.start_button.setEnabled(self._training_context_ready)
 
     def _refresh_data_group_inventory(
         self, project_path: str | Path | None = None
@@ -1118,6 +1257,7 @@ class MainWindow(QMainWindow):
         if saved_workspace in self.workspace_actions and saved_workspace != self._current_workspace:
             self._set_workspace(str(saved_workspace))
             self._restore_dataset_context(project_info)
+            self._restore_training_context(project_info)
 
         if project_info.schema_version >= project._JOB_SCHEMA_VERSION:
             self.configure_jobs_for_project(
@@ -1383,6 +1523,7 @@ class MainWindow(QMainWindow):
             terminal_callback=terminal_callback,
         )
         self._training_dock.setEnabled(True)
+        self._training_controls.start_button.setEnabled(self._training_context_ready)
         self._training_dock.setVisible(self._current_workspace == "Train")
 
     def configure_evaluation(

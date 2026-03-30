@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QSpinBox, QWidget
+from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QSpinBox, QWidget
 
 from .training_inputs import TrainingInputControls, TrainingInputOption
 from .training_protocol import TrainingConfig, TrainingRequest, TrainingProtocolError
@@ -48,6 +48,9 @@ class TrainingConfigurationControls(QWidget):
         self.weights_combo = QComboBox(self)
         self.weights_combo.setObjectName("trainingWeightsPolicyComboBox")
         self.weights_combo.addItems(("none", "imagenet"))
+        self.context_status_label = QLabel("Training context ready.", self)
+        self.context_status_label.setObjectName("trainingContextStatusLabel")
+        self.context_status_label.setWordWrap(True)
 
         layout = QFormLayout(self)
         layout.addRow("Epochs", self.epochs_spin)
@@ -56,6 +59,18 @@ class TrainingConfigurationControls(QWidget):
         layout.addRow("Seed", self.seed_spin)
         layout.addRow("Device", self.device_combo)
         layout.addRow("Weights policy", self.weights_combo)
+        layout.addRow(self.context_status_label)
+
+    def set_context_status(self, message: str, ready: bool) -> None:
+        self.context_status_label.setText(message)
+        self.context_status_label.setProperty("contextReady", ready)
+
+    def context_error(self) -> str | None:
+        try:
+            self.build_request("context-check", "context-staging")
+        except TrainingConfigurationError as error:
+            return str(error)
+        return None
 
     def build_request(self, request_id: str, artifact_staging_path: str | Path) -> TrainingRequest:
         snapshot = self._selected_option(self._input_controls.snapshot_combo, "Snapshot")
