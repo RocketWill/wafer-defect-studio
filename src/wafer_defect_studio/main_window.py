@@ -64,6 +64,7 @@ from .dataset_diagnostics import DatasetPreview, preview_project_dataset
 from .dataset_workflow import create_project_dataset_snapshot
 from .dataset_snapshot import load_dataset_snapshot
 from .evaluation_controls import DecisionService, EvaluationControls
+from .evaluation_inputs import EvaluationInputControls, EvaluationInputInventory, load_evaluation_input_inventory
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
@@ -618,12 +619,17 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._training_dock)
         self._training_dock.hide()
         self._evaluation_controls = EvaluationControls()
+        self._evaluation_input_controls = EvaluationInputControls()
+        evaluation_workspace = QWidget(self)
+        evaluation_layout = QVBoxLayout(evaluation_workspace)
+        evaluation_layout.addWidget(self._evaluation_input_controls)
+        evaluation_layout.addWidget(self._evaluation_controls)
         self._evaluation_dock = QDockWidget("Evaluation", self)
         self._evaluation_dock.setObjectName("evaluationDock")
         self._evaluation_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
         )
-        self._evaluation_dock.setWidget(self._evaluation_controls)
+        self._evaluation_dock.setWidget(evaluation_workspace)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._evaluation_dock)
         self._evaluation_dock.hide()
         self._detection_controls = DetectionControls()
@@ -701,6 +707,7 @@ class MainWindow(QMainWindow):
         self._data_workspace_dock.setVisible(workspace == self.WORKSPACES[0])
         self._training_scope_dock.setVisible(workspace == "Dataset")
         self._training_dock.setVisible(workspace == "Train")
+        self._evaluation_dock.setVisible(workspace == "Evaluate")
         self.workspaceChanged.emit(workspace)
 
     def _set_workspace_actions_enabled(self, has_project: bool) -> None:
@@ -812,6 +819,13 @@ class MainWindow(QMainWindow):
         self._restore_training_context(project_info)
         self._training_context_restoring = False
         self.configure_project_training()
+        try:
+            evaluation_inputs = load_evaluation_input_inventory(project_info.path)
+        except Exception as error:
+            evaluation_inputs = EvaluationInputInventory(
+                (), f"Evaluations unavailable: {error}"
+            )
+        self._evaluation_input_controls.set_inventory(evaluation_inputs)
         self._remember_recent_project(project_info.path)
 
     @staticmethod
