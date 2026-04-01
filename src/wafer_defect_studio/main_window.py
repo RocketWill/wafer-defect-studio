@@ -621,6 +621,7 @@ class MainWindow(QMainWindow):
         self._training_dock.hide()
         self._evaluation_controls = EvaluationControls()
         self._evaluation_input_controls = EvaluationInputControls()
+        self._evaluation_context_restoring = False
         self._evaluation_input_controls.combo.currentIndexChanged.connect(
             self._on_project_evaluation_changed
         )
@@ -829,7 +830,10 @@ class MainWindow(QMainWindow):
             evaluation_inputs = EvaluationInputInventory(
                 (), f"Evaluations unavailable: {error}"
             )
+        self._evaluation_context_restoring = True
         self._evaluation_input_controls.set_inventory(evaluation_inputs)
+        self._restore_evaluation_context(project_info)
+        self._evaluation_context_restoring = False
         self._remember_recent_project(project_info.path)
 
     @staticmethod
@@ -1546,6 +1550,8 @@ class MainWindow(QMainWindow):
 
     def _on_project_evaluation_changed(self, _index: int) -> None:
         evaluation_id = self._evaluation_input_controls.combo.currentData()
+        if not self._evaluation_context_restoring:
+            self._save_evaluation_context()
         if self._active_project_path is None or not evaluation_id:
             self._evaluation_controls.clear()
             return
@@ -1586,6 +1592,40 @@ class MainWindow(QMainWindow):
             decisions,
             decision_service=decision_service,
         )
+
+    @staticmethod
+    def _evaluation_context_key(project_info) -> str:
+        return f"evaluationContext/{project_info.project_id}/evaluationId"
+
+    def _save_evaluation_context(self) -> None:
+        if self._active_project_path is None or self._evaluation_context_restoring:
+            return
+        try:
+            project_info = project.open_project(self._active_project_path)
+        except Exception:
+            return
+        evaluation_id = self._evaluation_input_controls.combo.currentData()
+        if evaluation_id:
+            self._settings.setValue(
+                self._evaluation_context_key(project_info), str(evaluation_id)
+            )
+            self._settings.sync()
+
+    def _restore_evaluation_context(self, project_info) -> None:
+        evaluation_id = str(
+            self._settings.value(self._evaluation_context_key(project_info), "") or ""
+        )
+        if not evaluation_id:
+            return
+        index = self._evaluation_input_controls.combo.findData(evaluation_id)
+        if index < 0 or not self._evaluation_input_controls.combo.model().item(index).isEnabled():
+            self._evaluation_input_controls.combo.setCurrentIndex(-1)
+            self._evaluation_controls.clear()
+            self._evaluation_input_controls.status_label.setText(
+                f"Evaluation unavailable: {evaluation_id}"
+            )
+            return
+        self._evaluation_input_controls.combo.setCurrentIndex(index)
 
     def configure_evaluation(
         self,
