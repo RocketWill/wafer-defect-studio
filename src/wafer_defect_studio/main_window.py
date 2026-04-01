@@ -65,7 +65,7 @@ from .dataset_workflow import create_project_dataset_snapshot
 from .dataset_snapshot import load_dataset_snapshot
 from .evaluation_controls import DecisionService, EvaluationControls
 from .evaluation_inputs import EvaluationInputControls, EvaluationInputInventory, load_evaluation_input_inventory
-from .evaluation_run import load_evaluation, load_evaluation_decisions
+from .evaluation_run import load_evaluation, load_evaluation_decisions, record_evaluation_decision
 from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
@@ -1560,7 +1560,32 @@ class MainWindow(QMainWindow):
                 f"Unavailable Evaluation: {evaluation_id} — {error}"
             )
             return
-        self._evaluation_controls.configure(evaluation, decisions)
+        project_path = self._active_project_path
+
+        def decision_service(
+            evaluation_id: str,
+            status: str,
+            actor: str,
+            *,
+            criteria: dict[str, object],
+            notes: str,
+        ):
+            if project_path is None:
+                raise ValueError("No active project")
+            return record_evaluation_decision(
+                project_path,
+                evaluation_id,
+                status,
+                actor,
+                criteria=criteria,
+                notes=notes,
+            )
+
+        self._evaluation_controls.configure(
+            evaluation,
+            decisions,
+            decision_service=decision_service,
+        )
 
     def configure_evaluation(
         self,
