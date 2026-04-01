@@ -66,8 +66,14 @@ from .dataset_snapshot import load_dataset_snapshot
 from .evaluation_controls import DecisionService, EvaluationControls
 from .evaluation_inputs import EvaluationInputControls, EvaluationInputInventory, load_evaluation_input_inventory
 from .evaluation_run import load_evaluation, load_evaluation_decisions, record_evaluation_decision
-from .detection_controls import DetectionControls, DetectionLauncher, DetectionRequestSource
+from .detection_controls import (
+    DetectionControls,
+    DetectionLauncher,
+    DetectionRequestSource,
+    _load_staged_artifact,
+)
 from .detection_inputs import DetectionInputControls, DetectionInputInventory, load_detection_input_inventory
+from .detection_run import load_detection_run
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .export_controls import ExportCallback, ResultExportControls
@@ -640,6 +646,9 @@ class MainWindow(QMainWindow):
         self._evaluation_dock.hide()
         self._detection_controls = DetectionControls()
         self._detection_input_controls = DetectionInputControls()
+        self._detection_input_controls.run_combo.currentIndexChanged.connect(
+            self._on_project_detection_run_changed
+        )
         detection_workspace = QWidget(self)
         detection_layout = QVBoxLayout(detection_workspace)
         detection_layout.addWidget(self._detection_input_controls)
@@ -1660,6 +1669,24 @@ class MainWindow(QMainWindow):
         )
         self._evaluation_dock.setEnabled(True)
         self._evaluation_dock.show()
+
+    def _on_project_detection_run_changed(self, _index: int) -> None:
+        run_id = self._detection_input_controls.run_combo.currentData()
+        if self._active_project_path is None or not run_id:
+            self._detection_controls.set_artifact(None)
+            return
+        try:
+            run = load_detection_run(self._active_project_path, str(run_id))
+            if run.status != "completed" or run.artifact_path is None:
+                raise ValueError("Detection Run artifact is unavailable")
+            artifact = _load_staged_artifact(run.artifact_path)
+        except Exception as error:
+            self._detection_controls.set_artifact(None)
+            self._detection_input_controls.status_label.setText(
+                f"Unavailable Detection Run: {run_id} — {error}"
+            )
+            return
+        self._detection_controls.set_artifact(artifact)
 
     def configure_detection(
         self,
