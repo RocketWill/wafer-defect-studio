@@ -74,8 +74,19 @@ from .detection_controls import (
     DetectionRequestSource,
     _load_staged_artifact,
 )
+from .detection_profile_controls import (
+    DetectionProfileControls,
+    DetectionProfileDraft,
+    DetectionProfileEvaluationInventory,
+    load_detection_profile_evaluation_inventory,
+)
 from .detection_inputs import DetectionInputControls, DetectionInputInventory, load_detection_input_inventory
-from .detection_run import create_detection_run, load_detection_profile, load_detection_run
+from .detection_run import (
+    create_detection_profile,
+    create_detection_run,
+    load_detection_profile,
+    load_detection_run,
+)
 from .detection_worker import DetectionRequest, DetectionTerminal, start_detection_worker
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
@@ -648,6 +659,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._evaluation_dock)
         self._evaluation_dock.hide()
         self._detection_controls = DetectionControls()
+        self._detection_profile_controls = DetectionProfileControls()
         self._detection_input_controls = DetectionInputControls()
         self._detection_context_restoring = False
         self._detection_context_ready = True
@@ -668,6 +680,7 @@ class MainWindow(QMainWindow):
             widget.toggled.connect(self._on_detection_context_changed)
         detection_workspace = QWidget(self)
         detection_layout = QVBoxLayout(detection_workspace)
+        detection_layout.addWidget(self._detection_profile_controls)
         detection_layout.addWidget(self._detection_input_controls)
         detection_layout.addWidget(self._detection_controls)
         self._detection_dock = QDockWidget("Detection", self)
@@ -868,6 +881,20 @@ class MainWindow(QMainWindow):
         self._restore_evaluation_context(project_info)
         self._evaluation_context_restoring = False
         try:
+            detection_profile_evaluations = load_detection_profile_evaluation_inventory(
+                project_info.path
+            )
+        except Exception as error:
+            detection_profile_evaluations = DetectionProfileEvaluationInventory(
+                (), f"Detection Profile inputs unavailable: {error}"
+            )
+        self._detection_profile_controls.set_inventory(detection_profile_evaluations)
+        self._detection_profile_controls.configure(
+            lambda draft, path=project_info.path: self._create_project_detection_profile(
+                path, draft
+            )
+        )
+        try:
             detection_inputs = load_detection_input_inventory(project_info.path)
         except Exception as error:
             detection_inputs = DetectionInputInventory(
@@ -879,6 +906,41 @@ class MainWindow(QMainWindow):
         self._detection_context_restoring = False
         self.configure_project_detection()
         self._remember_recent_project(project_info.path)
+
+    def _create_project_detection_profile(
+        self,
+        project_path: str | Path,
+        draft: DetectionProfileDraft,
+    ):
+        """Persist one Detection Profile and refresh the active project inventory."""
+
+        evaluation = load_evaluation(project_path, draft.evaluation_id)
+        profile = create_detection_profile(
+            project_path,
+            evaluation_id=evaluation.evaluation_id,
+            training_run_id=evaluation.training_run_id,
+            window_size=draft.window_size,
+            stride=draft.stride,
+            reflect_padding=draft.reflect_padding,
+            thresholds=_class_thresholds(evaluation.thresholds),
+            center_weighting="uniform",
+            map_generation={},
+        )
+        detection_inputs = load_detection_input_inventory(project_path)
+        self._detection_context_restoring = True
+        try:
+            self._detection_input_controls.set_inventory(detection_inputs)
+            profile_index = self._detection_input_controls.profile_combo.findData(
+                profile.profile_id
+            )
+            if profile_index >= 0:
+                self._detection_input_controls.profile_combo.setCurrentIndex(profile_index)
+        finally:
+            self._detection_context_restoring = False
+        self._detection_context_ready = True
+        self._save_detection_context()
+        self.configure_project_detection()
+        return profile
 
     @staticmethod
     def _dataset_context_key(project_info, field: str) -> str:
@@ -2357,3 +2419,24 @@ class MainWindow(QMainWindow):
         if token != self._latest_load_token:
             return
         self.statusBar().showMessage(f"Error: {message}")
+
+
+def _class_thresholds(value: object) -> dict[str, object]:
+    """Convert Evaluation threshold rows to the Detection Profile class map."""
+
+    if not isinstance(value, dict):
+        return {}
+    rows = value.get("per_class")
+    if isinstance(rows, (list, tuple)):
+        return {
+            str(row["class_name"]): row["threshold"]
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("class_name")
+            and "threshold" in row
+        }
+    return {
+        str(name): threshold
+        for name, threshold in value.items()
+        if name not in {"min_recall_target", "minimum_recall_target", "target_satisfied"}
+    }
