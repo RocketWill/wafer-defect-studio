@@ -649,9 +649,23 @@ class MainWindow(QMainWindow):
         self._evaluation_dock.hide()
         self._detection_controls = DetectionControls()
         self._detection_input_controls = DetectionInputControls()
+        self._detection_context_restoring = False
+        self._detection_context_ready = True
+        self._detection_input_controls.profile_combo.currentIndexChanged.connect(
+            self._on_detection_context_changed
+        )
         self._detection_input_controls.run_combo.currentIndexChanged.connect(
             self._on_project_detection_run_changed
         )
+        self._detection_controls.class_selector.currentIndexChanged.connect(
+            self._on_detection_context_changed
+        )
+        for widget in (
+            self._detection_controls.image_layer_checkbox,
+            self._detection_controls.grid_layer_checkbox,
+            self._detection_controls.map_layer_checkbox,
+        ):
+            widget.toggled.connect(self._on_detection_context_changed)
         detection_workspace = QWidget(self)
         detection_layout = QVBoxLayout(detection_workspace)
         detection_layout.addWidget(self._detection_input_controls)
@@ -859,7 +873,10 @@ class MainWindow(QMainWindow):
             detection_inputs = DetectionInputInventory(
                 (), (), f"Detection inputs unavailable: {error}"
             )
+        self._detection_context_restoring = True
         self._detection_input_controls.set_inventory(detection_inputs)
+        self._restore_detection_context(project_info)
+        self._detection_context_restoring = False
         self.configure_project_detection()
         self._remember_recent_project(project_info.path)
 
@@ -1674,7 +1691,95 @@ class MainWindow(QMainWindow):
         self._evaluation_dock.setEnabled(True)
         self._evaluation_dock.show()
 
+    @staticmethod
+    def _detection_context_key(project_info, field: str) -> str:
+        return f"detectionContext/{project_info.project_id}/{field}"
+
+    def _save_detection_context(self) -> None:
+        if self._active_project_path is None or self._detection_context_restoring:
+            return
+        try:
+            project_info = project.open_project(self._active_project_path)
+        except Exception:
+            return
+        values = {
+            "profileId": self._detection_input_controls.profile_combo.currentData() or "",
+            "runId": self._detection_input_controls.run_combo.currentData() or "",
+            "className": self._detection_controls.class_selector.currentText(),
+            "imageLayer": self._detection_controls.image_layer_checkbox.isChecked(),
+            "gridLayer": self._detection_controls.grid_layer_checkbox.isChecked(),
+            "mapLayer": self._detection_controls.map_layer_checkbox.isChecked(),
+        }
+        for field, value in values.items():
+            self._settings.setValue(self._detection_context_key(project_info, field), value)
+        self._settings.sync()
+
+    def _on_detection_context_changed(self, *_args) -> None:
+        if self._detection_context_restoring:
+            return
+        self._save_detection_context()
+
+    def _restore_detection_context(self, project_info) -> None:
+        profile_id = str(
+            self._settings.value(self._detection_context_key(project_info, "profileId"), "")
+            or ""
+        )
+        run_id = str(
+            self._settings.value(self._detection_context_key(project_info, "runId"), "")
+            or ""
+        )
+        profile_index = self._detection_input_controls.profile_combo.findData(profile_id)
+        profile_item = (
+            self._detection_input_controls.profile_combo.model().item(profile_index)
+            if profile_index >= 0
+            else None
+        )
+        if profile_id and (profile_item is None or not profile_item.isEnabled()):
+            self._detection_context_ready = False
+            self._detection_input_controls.profile_combo.setCurrentIndex(-1)
+            self._detection_controls.set_artifact(None)
+            self._detection_input_controls.status_label.setText(
+                f"Detection Profile unavailable: {profile_id}"
+            )
+            return
+        run_index = self._detection_input_controls.run_combo.findData(run_id)
+        run_item = (
+            self._detection_input_controls.run_combo.model().item(run_index)
+            if run_index >= 0
+            else None
+        )
+        if run_id and (run_item is None or not run_item.isEnabled()):
+            self._detection_context_ready = False
+            self._detection_input_controls.run_combo.setCurrentIndex(-1)
+            self._detection_controls.set_artifact(None)
+            self._detection_input_controls.status_label.setText(
+                f"Detection Run unavailable: {run_id}"
+            )
+            return
+        self._detection_context_ready = True
+        if profile_index >= 0:
+            self._detection_input_controls.profile_combo.setCurrentIndex(profile_index)
+        if run_index >= 0:
+            self._detection_input_controls.run_combo.setCurrentIndex(run_index)
+        class_name = str(
+            self._settings.value(self._detection_context_key(project_info, "className"), "")
+            or ""
+        )
+        class_index = self._detection_controls.class_selector.findText(class_name)
+        if class_index >= 0:
+            self._detection_controls.class_selector.setCurrentIndex(class_index)
+        for widget, field in (
+            (self._detection_controls.image_layer_checkbox, "imageLayer"),
+            (self._detection_controls.grid_layer_checkbox, "gridLayer"),
+            (self._detection_controls.map_layer_checkbox, "mapLayer"),
+        ):
+            value = self._settings.value(self._detection_context_key(project_info, field), None)
+            if value is not None:
+                widget.setChecked(str(value).lower() not in {"0", "false", "no"})
+
     def _on_project_detection_run_changed(self, _index: int) -> None:
+        if not self._detection_context_restoring:
+            self._save_detection_context()
         run_id = self._detection_input_controls.run_combo.currentData()
         if self._active_project_path is None or not run_id:
             self._detection_controls.set_artifact(None)
@@ -1773,6 +1878,7 @@ class MainWindow(QMainWindow):
             terminal_callback=terminal_callback,
         )
         self._detection_dock.setEnabled(True)
+        self._detection_controls.start_button.setEnabled(self._detection_context_ready)
         self._detection_dock.setVisible(self._current_workspace == "Detect")
 
     @staticmethod
