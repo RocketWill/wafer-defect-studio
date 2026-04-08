@@ -88,6 +88,9 @@ from .detection_run import (
     load_detection_run,
 )
 from .detection_worker import DetectionRequest, DetectionTerminal, start_detection_worker
+from .proposal_generation_controls import ProposalGenerationControls
+from .proposal_generation import generate_proposals
+from .proposal_store import load_defect_proposals, save_defect_proposal
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .export_controls import ExportCallback, ResultExportControls
@@ -661,6 +664,7 @@ class MainWindow(QMainWindow):
         self._detection_controls = DetectionControls()
         self._detection_profile_controls = DetectionProfileControls()
         self._detection_input_controls = DetectionInputControls()
+        self._proposal_generation_controls = ProposalGenerationControls()
         self._detection_context_restoring = False
         self._detection_context_ready = True
         self._detection_input_controls.profile_combo.currentIndexChanged.connect(
@@ -682,6 +686,7 @@ class MainWindow(QMainWindow):
         detection_layout = QVBoxLayout(detection_workspace)
         detection_layout.addWidget(self._detection_profile_controls)
         detection_layout.addWidget(self._detection_input_controls)
+        detection_layout.addWidget(self._proposal_generation_controls)
         detection_layout.addWidget(self._detection_controls)
         self._detection_dock = QDockWidget("Detection", self)
         self._detection_dock.setObjectName("detectionControlsDock")
@@ -1845,6 +1850,9 @@ class MainWindow(QMainWindow):
         run_id = self._detection_input_controls.run_combo.currentData()
         if self._active_project_path is None or not run_id:
             self._detection_controls.set_artifact(None)
+            self._proposal_generation_controls.configure(
+                None, status="Select a completed Detection Run first."
+            )
             return
         try:
             run = load_detection_run(self._active_project_path, str(run_id))
@@ -1853,11 +1861,63 @@ class MainWindow(QMainWindow):
             artifact = _load_staged_artifact(run.artifact_path)
         except Exception as error:
             self._detection_controls.set_artifact(None)
+            self._proposal_generation_controls.configure(
+                None, status=f"Proposal generation unavailable: {error}"
+            )
             self._detection_input_controls.status_label.setText(
                 f"Unavailable Detection Run: {run_id} — {error}"
             )
             return
         self._detection_controls.set_artifact(artifact)
+        self._configure_project_proposal_generation(str(run_id))
+
+    def _configure_project_proposal_generation(self, run_id: str) -> None:
+        project_path = self._active_project_path
+        if project_path is None:
+            self._proposal_generation_controls.configure(None)
+            return
+        self._proposal_generation_controls.configure(
+            lambda path=project_path, identifier=run_id: self._generate_project_proposals(
+                path, identifier
+            ),
+            status=f"Detection Run {run_id} is ready for Proposal generation.",
+        )
+
+    @staticmethod
+    def _generate_project_proposals(
+        project_path: str | Path,
+        run_id: str,
+    ):
+        """Generate and persist proposals for one completed Detection Run."""
+
+        run = load_detection_run(project_path, run_id)
+        if run.status != "completed" or run.artifact_path is None:
+            raise ValueError("a completed Detection Run artifact is required")
+        profile = load_detection_profile(project_path, run.profile_id)
+        existing = load_defect_proposals(project_path, detection_run_id=run.run_id)
+        if existing:
+            return existing
+        artifact = _load_staged_artifact(run.artifact_path)
+        provenance = {
+            **artifact.provenance,
+            "detection_run_id": run.run_id,
+            "profile_id": profile.profile_id,
+            "evaluation_id": profile.evaluation_id,
+            "source_coordinate_system": "source-image-pixels",
+        }
+        proposals = generate_proposals(
+            artifact,
+            profile,
+            provenance=provenance,
+        )
+        for proposal in proposals:
+            save_defect_proposal(
+                project_path,
+                proposal,
+                detection_run_id=run.run_id,
+                profile_id=profile.profile_id,
+            )
+        return proposals
 
     def configure_project_detection(
         self,
