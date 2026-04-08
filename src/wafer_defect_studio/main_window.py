@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import numpy as np
+
 from PySide6.QtCore import QPoint, QSettings, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
@@ -73,7 +75,8 @@ from .detection_controls import (
     _load_staged_artifact,
 )
 from .detection_inputs import DetectionInputControls, DetectionInputInventory, load_detection_input_inventory
-from .detection_run import load_detection_run
+from .detection_run import create_detection_run, load_detection_profile, load_detection_run
+from .detection_worker import DetectionRequest, DetectionTerminal, start_detection_worker
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .export_controls import ExportCallback, ResultExportControls
@@ -857,6 +860,7 @@ class MainWindow(QMainWindow):
                 (), (), f"Detection inputs unavailable: {error}"
             )
         self._detection_input_controls.set_inventory(detection_inputs)
+        self.configure_project_detection()
         self._remember_recent_project(project_info.path)
 
     @staticmethod
@@ -1687,6 +1691,112 @@ class MainWindow(QMainWindow):
             )
             return
         self._detection_controls.set_artifact(artifact)
+
+    def configure_project_detection(
+        self,
+        *,
+        launcher: DetectionLauncher | None = None,
+    ) -> None:
+        """Bind Detect to the active image/profile and persist terminal Runs."""
+
+        project_path = self._active_project_path
+        if project_path is None:
+            self._detection_controls.status_label.setText("Status: Open a project first")
+            return
+        pending: dict[str, tuple[DetectionRequest, object, dict[str, str]]] = {}
+
+        def request_source() -> DetectionRequest:
+            if self._loaded_wafer_image is None or self._current_image_asset is None:
+                raise ValueError("A loaded native wafer image is required")
+            profile_id = self._detection_input_controls.profile_combo.currentData()
+            if not profile_id:
+                raise ValueError("A Detection Profile is required")
+            profile = load_detection_profile(project_path, str(profile_id))
+            run_id = str(uuid4())
+            staging_path = project_path / "runs" / ".staging" / f"detection-{run_id}"
+            class_names = tuple(profile.thresholds) or ("defect",)
+            source_fingerprints = {
+                self._current_image_asset.image_asset_id: self._current_image_asset.fingerprint
+            }
+            request = DetectionRequest(
+                request_id=run_id,
+                source=np.asarray(self._loaded_wafer_image.pixels).reshape(
+                    self._loaded_wafer_image.height,
+                    self._loaded_wafer_image.width,
+                ),
+                staging_path=staging_path,
+                run_id=run_id,
+                profile_id=profile.profile_id,
+                approved_evaluation_id=profile.evaluation_id,
+                class_names=class_names,
+                window_size=profile.window_size,
+                stride=profile.stride,
+                reflect_padding=profile.reflect_padding,
+                center_weighting=profile.center_weighting,
+                provenance={"coordinate_system": "source-image-pixels"},
+            )
+            pending[run_id] = (request, profile, source_fingerprints)
+            return request
+
+        worker_launcher = launcher or start_detection_worker
+
+        def project_launcher(request: DetectionRequest):
+            try:
+                return worker_launcher(request)
+            except Exception as error:
+                self._persist_project_detection_terminal(
+                    project_path, request, pending, "failed", str(error)
+                )
+                raise
+
+        def terminal_callback(message: DetectionTerminal) -> None:
+            request_info = pending.get(message.request_id)
+            if request_info is None:
+                raise ValueError(f"Unknown Detection Run: {message.request_id}")
+            request, _profile, source_fingerprints = request_info
+            create_detection_run(
+                project_path,
+                profile_id=str(request.profile_id),
+                evaluation_id=str(request.approved_evaluation_id),
+                source_fingerprints=source_fingerprints,
+                provenance=dict(request.provenance),
+                status=message.status,
+                staging_path=request.staging_path,
+                artifact_path=message.artifact_staging_path,
+                run_id=request.run_id,
+            )
+
+        self._detection_controls.configure(
+            artifact=self._detection_controls.artifact,
+            request_source=request_source,
+            launcher=project_launcher,
+            terminal_callback=terminal_callback,
+        )
+        self._detection_dock.setEnabled(True)
+        self._detection_dock.setVisible(self._current_workspace == "Detect")
+
+    @staticmethod
+    def _persist_project_detection_terminal(
+        project_path,
+        request,
+        pending,
+        status: str,
+        message: str,
+    ) -> None:
+        request_info = pending.get(request.request_id)
+        if request_info is None:
+            return
+        _request, profile, source_fingerprints = request_info
+        create_detection_run(
+            project_path,
+            profile_id=profile.profile_id,
+            evaluation_id=profile.evaluation_id,
+            source_fingerprints=source_fingerprints,
+            provenance=dict(request.provenance),
+            status=status,
+            staging_path=request.staging_path,
+            run_id=request.run_id,
+        )
 
     def configure_detection(
         self,

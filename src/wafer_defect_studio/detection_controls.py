@@ -41,6 +41,7 @@ from .detection_worker import (
 
 DetectionRequestSource = DetectionRequest | Callable[[], DetectionRequest]
 DetectionLauncher = Callable[[DetectionRequest], Any]
+DetectionTerminalCallback = Callable[[DetectionTerminal], Any]
 
 
 class DetectionControls(QWidget):
@@ -51,6 +52,7 @@ class DetectionControls(QWidget):
         self._artifact: CamDetectionArtifact | None = None
         self._request_source: DetectionRequestSource | None = None
         self._launcher: DetectionLauncher = start_detection_worker
+        self._terminal_callback: DetectionTerminalCallback | None = None
         self._handle: Any | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -168,6 +170,7 @@ class DetectionControls(QWidget):
         *,
         launcher: DetectionLauncher | None = None,
         request_source: DetectionRequestSource | None = None,
+        terminal_callback: DetectionTerminalCallback | None = None,
     ) -> None:
         """Bind an immutable artifact and optional value-only worker request."""
 
@@ -181,6 +184,7 @@ class DetectionControls(QWidget):
         self.set_artifact(artifact)
         self._request_source = chosen_request
         self._launcher = launcher or start_detection_worker
+        self._terminal_callback = terminal_callback
         self._handle = None
         self._timer.stop()
         self.start_button.setEnabled(chosen_request is not None)
@@ -321,6 +325,12 @@ class DetectionControls(QWidget):
             self._finish("interrupted", "Detection worker exited without a terminal status")
 
     def _finish_message(self, message: DetectionTerminal) -> None:
+        if self._terminal_callback is not None:
+            try:
+                self._terminal_callback(message)
+            except Exception as error:
+                self._finish("failed", f"Failed to persist Detection Run — {error}")
+                return
         if message.status == "completed" and message.artifact_staging_path:
             try:
                 artifact = _load_staged_artifact(message.artifact_staging_path)
