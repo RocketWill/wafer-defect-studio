@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import unittest
@@ -21,7 +22,7 @@ import tests.test_proposal_review as proposal_review_test
 from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.main_window import MainWindow
 from wafer_defect_studio.proposal_generation import DefectProposal
-from wafer_defect_studio.proposal_review import load_proposal_revisions
+from wafer_defect_studio.proposal_review import load_proposal_revisions, record_review
 from wafer_defect_studio.proposal_store import save_defect_proposal
 
 
@@ -141,6 +142,93 @@ class ProjectProposalReviewContextTest(unittest.TestCase):
                 finally:
                     connection.close()
                 self.assertEqual(annotations_after, annotations_before)
+            finally:
+                window.close()
+                window.deleteLater()
+                app.processEvents()
+
+    def test_review_workspace_previews_accepted_proposals_without_project_writes(self):
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project_path, run_id, profile_id = (
+                proposal_review_test.ProposalReviewTest()._project_with_detection_run(root)
+            )
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
+                connection.execute(
+                    "INSERT INTO grid_profiles VALUES (?, ?, ?, ?)",
+                    ("grid-1", 1, 32, 24),
+                )
+                connection.execute(
+                    "INSERT INTO image_grid_placements VALUES (?, ?, ?, ?, ?)",
+                    ("image-1", "grid-1", 1, 0, 0),
+                )
+                connection.execute(
+                    "INSERT INTO effective_wafer_areas VALUES (?, ?, ?, ?)",
+                    (
+                        "image-1",
+                        "ellipse",
+                        json.dumps(
+                            {
+                                "center_x": 64,
+                                "center_y": 48,
+                                "radius_x": 64,
+                                "radius_y": 48,
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        1,
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            proposal = DefectProposal(
+                "proposal-1",
+                "scratch",
+                Rect(43, 33, 5, 4),
+                12,
+                0.91,
+                0.74,
+                {
+                    "detection_run_id": run_id,
+                    "profile_id": profile_id,
+                    "image_asset_id": "image-1",
+                },
+            )
+            save_defect_proposal(
+                project_path,
+                proposal,
+                detection_run_id=run_id,
+                profile_id=profile_id,
+            )
+            record_review(project_path, proposal.proposal_id, "accepted", actor="engineer")
+            database = project_path / "project.sqlite"
+            before = database.read_bytes()
+            settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
+            window = MainWindow(settings=settings)
+            window.show()
+            app.processEvents()
+            try:
+                with patch.object(
+                    QFileDialog,
+                    "getExistingDirectory",
+                    return_value=str(project_path),
+                ):
+                    window.open_project_action.trigger()
+                window.workspace_actions["Review"].trigger()
+                app.processEvents()
+                preview = window.findChild(QPushButton, "previewConversionButton")
+                self.assertIsNotNone(preview)
+                preview.click()
+                app.processEvents()
+                conversion_dock = window.findChild(QDockWidget, "proposalConversionDock")
+                preview_label = window.findChild(QLabel, "proposalConversionPreviewLabel")
+                self.assertTrue(conversion_dock.isVisible())
+                self.assertIn("(1, 1)", preview_label.text())
+                self.assertEqual(database.read_bytes(), before)
             finally:
                 window.close()
                 window.deleteLater()

@@ -27,11 +27,13 @@ from PySide6.QtWidgets import (
 )
 
 from .detection_windows import Rect
+from .proposal_conversion import ConversionPreview
 from .proposal_generation import DefectProposal
 from .proposal_queue import ReviewQueueFilters, ReviewQueueItem, filter_review_queue
 
 
 ReviewCallback = Callable[[str, str, Rect, Mapping[str, Any]], Any]
+ConversionPreviewCallback = Callable[[tuple[ReviewQueueItem, ...]], ConversionPreview]
 
 
 class ProposalReviewControls(QWidget):
@@ -44,6 +46,7 @@ class ProposalReviewControls(QWidget):
         super().__init__(parent)
         self._items: tuple[ReviewQueueItem, ...] = ()
         self._review_callback: ReviewCallback | None = None
+        self._conversion_preview_callback: ConversionPreviewCallback | None = None
         self._selected_proposal_id: str | None = None
 
         self.low_confidence_checkbox = QCheckBox("Low confidence (< 0.50)", self)
@@ -95,10 +98,13 @@ class ProposalReviewControls(QWidget):
         self.reject_button.setObjectName("rejectProposalButton")
         self.correct_button = QPushButton("Correct", self)
         self.correct_button.setObjectName("correctProposalButton")
+        self.preview_conversion_button = QPushButton("Preview Conversion", self)
+        self.preview_conversion_button.setObjectName("previewConversionButton")
         action_row = QHBoxLayout()
         action_row.addWidget(self.accept_button)
         action_row.addWidget(self.reject_button)
         action_row.addWidget(self.correct_button)
+        action_row.addWidget(self.preview_conversion_button)
 
         self.status_label = QLabel("No proposals configured.", self)
         self.status_label.setObjectName("proposalReviewStatusLabel")
@@ -118,6 +124,7 @@ class ProposalReviewControls(QWidget):
         self.accept_button.clicked.connect(lambda: self._submit("accepted"))
         self.reject_button.clicked.connect(lambda: self._submit("rejected"))
         self.correct_button.clicked.connect(lambda: self._submit("corrected"))
+        self.preview_conversion_button.clicked.connect(self._preview_conversion)
         self._set_action_enabled(False)
 
     @property
@@ -130,11 +137,14 @@ class ProposalReviewControls(QWidget):
         self,
         items: Iterable[ReviewQueueItem] | Iterable[DefectProposal],
         review_callback: ReviewCallback | None,
+        conversion_preview_callback: ConversionPreviewCallback | None = None,
     ) -> None:
         """Bind pure queue/proposal values and an injected review callback."""
 
         if review_callback is not None and not callable(review_callback):
             raise TypeError("review_callback must be callable or None")
+        if conversion_preview_callback is not None and not callable(conversion_preview_callback):
+            raise TypeError("conversion_preview_callback must be callable or None")
         values = tuple(items)
         if values and all(isinstance(value, ReviewQueueItem) for value in values):
             queue = filter_review_queue(values)
@@ -146,6 +156,7 @@ class ProposalReviewControls(QWidget):
             raise TypeError("items must contain only ReviewQueueItem or DefectProposal values")
         self._items = tuple(queue)
         self._review_callback = review_callback
+        self._conversion_preview_callback = conversion_preview_callback
         self._selected_proposal_id = None
         self.low_confidence_checkbox.setChecked(False)
         self.conflict_checkbox.setChecked(False)
@@ -153,6 +164,7 @@ class ProposalReviewControls(QWidget):
         self.status_filter.setCurrentIndex(0)
         self._refresh()
         self.status_label.setText(f"{len(self._items)} proposal(s) ready for review.")
+        self._refresh_preview_enabled()
 
     def _set_correction_ranges(self) -> None:
         self.correction_x_spin.setRange(0, self._SPINBOX_MAX)
@@ -207,6 +219,7 @@ class ProposalReviewControls(QWidget):
         else:
             self._selected_proposal_id = None
             self._set_action_enabled(False)
+        self._refresh_preview_enabled()
 
     def _selection_changed(self, row: int, _column: int, _previous_row: int, _previous_column: int) -> None:
         if row < 0 or row >= self.proposal_table.rowCount():
@@ -253,6 +266,36 @@ class ProposalReviewControls(QWidget):
         self.correction_width_spin.setEnabled(enabled)
         self.correction_height_spin.setEnabled(enabled)
 
+    def _convertible_items(self) -> tuple[ReviewQueueItem, ...]:
+        return tuple(
+            item
+            for item in self._items
+            if str(item.status).lower() in {"accepted", "corrected"}
+        )
+
+    def _refresh_preview_enabled(self) -> None:
+        self.preview_conversion_button.setEnabled(
+            self._conversion_preview_callback is not None and bool(self._convertible_items())
+        )
+
+    def _preview_conversion(self) -> None:
+        callback = self._conversion_preview_callback
+        items = self._convertible_items()
+        if callback is None or not items:
+            self.status_label.setText("Accept or correct at least one Proposal first.")
+            self._refresh_preview_enabled()
+            return
+        try:
+            preview = callback(items)
+            if not isinstance(preview, ConversionPreview):
+                raise TypeError("conversion preview callback returned an invalid value")
+        except Exception as error:  # callback owns project geometry/error policy
+            self.status_label.setText(f"Conversion preview failed: {error}")
+            return
+        self.status_label.setText(
+            f"Conversion preview ready: {len(preview.cells)} affected cell(s)."
+        )
+
     def _submit(self, status: str) -> None:
         item = self._selected_item()
         callback = self._review_callback
@@ -289,10 +332,15 @@ class ProposalReviewControls(QWidget):
         )
         self._refresh()
         self.status_label.setText(f"{status.title()} {item.proposal_id}.")
+        self._refresh_preview_enabled()
 
 
 def _format_rect(rect: Rect) -> str:
     return f"({rect.x}, {rect.y}, {rect.width}, {rect.height})"
 
 
-__all__ = ["ProposalReviewControls", "ReviewCallback"]
+__all__ = [
+    "ConversionPreviewCallback",
+    "ProposalReviewControls",
+    "ReviewCallback",
+]

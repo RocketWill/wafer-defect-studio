@@ -93,6 +93,7 @@ from .proposal_generation import generate_proposals
 from .proposal_queue import build_review_queue
 from .proposal_review import load_proposal_revisions, record_review
 from .proposal_store import load_defect_proposals, save_defect_proposal
+from .proposal_conversion import preview_proposal_conversion
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .export_controls import ExportCallback, ResultExportControls
@@ -1882,11 +1883,13 @@ class MainWindow(QMainWindow):
         project_path = self._active_project_path
         run_id = self._detection_input_controls.run_combo.currentData()
         if project_path is None or not run_id:
-            self._proposal_review_controls.configure((), None)
+            self._proposal_review_controls.configure((), None, None)
             self._proposal_review_controls.status_label.setText(
                 "No completed Detection Run is selected."
             )
             self._proposal_review_dock.setEnabled(False)
+            self._proposal_conversion_dock.setEnabled(False)
+            self._proposal_conversion_dock.hide()
             return
         try:
             proposals = load_defect_proposals(project_path, detection_run_id=str(run_id))
@@ -1898,12 +1901,15 @@ class MainWindow(QMainWindow):
             }
             queue = build_review_queue(proposals, revisions)
         except Exception as error:
-            self._proposal_review_controls.configure((), None)
+            self._proposal_review_controls.configure((), None, None)
             self._proposal_review_controls.status_label.setText(
                 f"Proposal Review unavailable: {error}"
             )
             self._proposal_review_dock.setEnabled(False)
+            self._proposal_conversion_dock.setEnabled(False)
+            self._proposal_conversion_dock.hide()
             return
+
         def review_callback(proposal_id, status, source_rect, provenance):
             return record_review(
                 project_path,
@@ -1914,13 +1920,93 @@ class MainWindow(QMainWindow):
                 actor="Algorithm Engineer",
             )
 
-        self._proposal_review_controls.configure(queue, review_callback)
+        def conversion_preview_callback(items):
+            preview = self._project_conversion_preview(
+                project_path,
+                str(run_id),
+                tuple(items),
+            )
+            self.configure_proposal_conversion(preview, None)
+            return preview
+
+        self._proposal_review_controls.configure(
+            queue,
+            review_callback,
+            conversion_preview_callback,
+        )
         self._proposal_review_controls.status_label.setText(
             f"{len(queue)} proposal(s) loaded for Detection Run {run_id}."
             if queue
             else f"No Proposals available for Detection Run {run_id}."
         )
         self._proposal_review_dock.setEnabled(True)
+
+    @staticmethod
+    def _project_conversion_preview(
+        project_path: str | Path,
+        run_id: str,
+        items,
+    ):
+        """Build a read-only source-coordinate conversion preview for a Run."""
+
+        values = tuple(items)
+        image_ids = {
+            str(value)
+            for item in values
+            for value in (
+                item.proposal.provenance.get("image_asset_id"),
+                item.proposal.provenance.get("image_id"),
+            )
+            if isinstance(value, str) and value
+        }
+        if not image_ids:
+            run = load_detection_run(project_path, run_id)
+            image_ids = set(run.source_fingerprints)
+        if len(image_ids) != 1:
+            raise ValueError("Proposal conversion requires exactly one source image")
+        image_asset_id = next(iter(image_ids))
+
+        assets = image_asset.load_image_assets(project_path)
+        reopened = next(
+            (
+                candidate
+                for candidate in assets
+                if candidate.asset.image_asset_id == image_asset_id
+            ),
+            None,
+        )
+        if reopened is None:
+            raise ValueError(f"Unknown source image: {image_asset_id}")
+
+        placement = load_image_grid_placement(project_path, image_asset_id)
+        if placement is None:
+            raise ValueError("Image Grid placement is required before conversion")
+        profile = next(
+            (
+                candidate
+                for candidate in load_grid_profiles(project_path)
+                if candidate.grid_profile_id == placement.grid_profile_id
+                and candidate.version == placement.grid_profile_version
+            ),
+            None,
+        )
+        if profile is None:
+            raise ValueError("The placed Grid Profile revision is unavailable")
+
+        area = load_effective_wafer_area(project_path, image_asset_id)
+        if area is None or not area.confirmed:
+            raise ValueError("A confirmed Effective Wafer Area is required before conversion")
+
+        grids = annotation_grids(
+            reopened.asset.width,
+            reopened.asset.height,
+            profile.cell_width,
+            profile.cell_height,
+            placement.origin_x,
+            placement.origin_y,
+        )
+        participating = participating_annotation_grids(grids, area)
+        return preview_proposal_conversion(values, tuple(participating))
 
     def _configure_project_proposal_generation(self, run_id: str) -> None:
         project_path = self._active_project_path
