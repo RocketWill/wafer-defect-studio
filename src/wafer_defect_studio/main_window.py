@@ -91,7 +91,7 @@ from .detection_worker import DetectionRequest, DetectionTerminal, start_detecti
 from .proposal_generation_controls import ProposalGenerationControls
 from .proposal_generation import generate_proposals
 from .proposal_queue import build_review_queue
-from .proposal_review import load_proposal_revisions
+from .proposal_review import load_proposal_revisions, record_review
 from .proposal_store import load_defect_proposals, save_defect_proposal
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
@@ -1904,7 +1904,17 @@ class MainWindow(QMainWindow):
             )
             self._proposal_review_dock.setEnabled(False)
             return
-        self._proposal_review_controls.configure(queue, None)
+        def review_callback(proposal_id, status, source_rect, provenance):
+            return record_review(
+                project_path,
+                proposal_id,
+                status,
+                source_rect=source_rect,
+                provenance=provenance,
+                actor="Algorithm Engineer",
+            )
+
+        self._proposal_review_controls.configure(queue, review_callback)
         self._proposal_review_controls.status_label.setText(
             f"{len(queue)} proposal(s) loaded for Detection Run {run_id}."
             if queue
