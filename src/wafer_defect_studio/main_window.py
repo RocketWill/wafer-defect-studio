@@ -90,6 +90,8 @@ from .detection_run import (
 from .detection_worker import DetectionRequest, DetectionTerminal, start_detection_worker
 from .proposal_generation_controls import ProposalGenerationControls
 from .proposal_generation import generate_proposals
+from .proposal_queue import build_review_queue
+from .proposal_review import load_proposal_revisions
 from .proposal_store import load_defect_proposals, save_defect_proposal
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
@@ -764,6 +766,9 @@ class MainWindow(QMainWindow):
         self._training_dock.setVisible(workspace == "Train")
         self._evaluation_dock.setVisible(workspace == "Evaluate")
         self._detection_dock.setVisible(workspace == "Detect")
+        self._proposal_review_dock.setVisible(workspace == "Review")
+        if workspace == "Review":
+            self._refresh_project_proposal_review()
         self.workspaceChanged.emit(workspace)
 
     def _set_workspace_actions_enabled(self, has_project: bool) -> None:
@@ -1870,6 +1875,42 @@ class MainWindow(QMainWindow):
             return
         self._detection_controls.set_artifact(artifact)
         self._configure_project_proposal_generation(str(run_id))
+        if self._current_workspace == "Review":
+            self._refresh_project_proposal_review()
+
+    def _refresh_project_proposal_review(self) -> None:
+        project_path = self._active_project_path
+        run_id = self._detection_input_controls.run_combo.currentData()
+        if project_path is None or not run_id:
+            self._proposal_review_controls.configure((), None)
+            self._proposal_review_controls.status_label.setText(
+                "No completed Detection Run is selected."
+            )
+            self._proposal_review_dock.setEnabled(False)
+            return
+        try:
+            proposals = load_defect_proposals(project_path, detection_run_id=str(run_id))
+            revisions = {
+                proposal.proposal_id: load_proposal_revisions(
+                    project_path, proposal.proposal_id
+                )
+                for proposal in proposals
+            }
+            queue = build_review_queue(proposals, revisions)
+        except Exception as error:
+            self._proposal_review_controls.configure((), None)
+            self._proposal_review_controls.status_label.setText(
+                f"Proposal Review unavailable: {error}"
+            )
+            self._proposal_review_dock.setEnabled(False)
+            return
+        self._proposal_review_controls.configure(queue, None)
+        self._proposal_review_controls.status_label.setText(
+            f"{len(queue)} proposal(s) loaded for Detection Run {run_id}."
+            if queue
+            else f"No Proposals available for Detection Run {run_id}."
+        )
+        self._proposal_review_dock.setEnabled(True)
 
     def _configure_project_proposal_generation(self, run_id: str) -> None:
         project_path = self._active_project_path
