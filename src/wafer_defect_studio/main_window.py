@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .image_asset import ImageAsset, ReopenedWaferImage, SourceHealth, _source_health
-from .annotation import GridAnnotation, save_grid_annotation
+from .annotation import GridAnnotation, load_grid_annotation, save_grid_annotation
 from .annotation_tools import AnnotationMode
 from .autosave import AutosaveGuard, SaveFailureState
 from .defect_class import DefectClass, load_defect_classes
@@ -93,7 +93,8 @@ from .proposal_generation import generate_proposals
 from .proposal_queue import build_review_queue
 from .proposal_review import load_proposal_revisions, record_review
 from .proposal_store import load_defect_proposals, save_defect_proposal
-from .proposal_conversion import preview_proposal_conversion
+from .proposal_conversion import ConversionPreview, preview_proposal_conversion
+from .proposal_conversion_store import confirm_proposal_conversion
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .export_controls import ExportCallback, ResultExportControls
@@ -1921,12 +1922,22 @@ class MainWindow(QMainWindow):
             )
 
         def conversion_preview_callback(items):
+            image_asset_id = self._project_conversion_image_asset_id(
+                project_path,
+                str(run_id),
+                tuple(items),
+            )
             preview = self._project_conversion_preview(
                 project_path,
                 str(run_id),
                 tuple(items),
             )
-            self.configure_proposal_conversion(preview, None)
+            self.configure_proposal_conversion(
+                preview,
+                lambda value, path=project_path, image_id=image_asset_id: (
+                    self._confirm_project_proposal_conversion(path, image_id, value)
+                ),
+            )
             return preview
 
         self._proposal_review_controls.configure(
@@ -1942,13 +1953,11 @@ class MainWindow(QMainWindow):
         self._proposal_review_dock.setEnabled(True)
 
     @staticmethod
-    def _project_conversion_preview(
+    def _project_conversion_image_asset_id(
         project_path: str | Path,
         run_id: str,
         items,
-    ):
-        """Build a read-only source-coordinate conversion preview for a Run."""
-
+    ) -> str:
         values = tuple(items)
         image_ids = {
             str(value)
@@ -1964,7 +1973,22 @@ class MainWindow(QMainWindow):
             image_ids = set(run.source_fingerprints)
         if len(image_ids) != 1:
             raise ValueError("Proposal conversion requires exactly one source image")
-        image_asset_id = next(iter(image_ids))
+        return next(iter(image_ids))
+
+    @staticmethod
+    def _project_conversion_preview(
+        project_path: str | Path,
+        run_id: str,
+        items,
+    ):
+        """Build a read-only source-coordinate conversion preview for a Run."""
+
+        values = tuple(items)
+        image_asset_id = MainWindow._project_conversion_image_asset_id(
+            project_path,
+            run_id,
+            values,
+        )
 
         assets = image_asset.load_image_assets(project_path)
         reopened = next(
@@ -2006,7 +2030,52 @@ class MainWindow(QMainWindow):
             placement.origin_y,
         )
         participating = participating_annotation_grids(grids, area)
-        return preview_proposal_conversion(values, tuple(participating))
+        preview = preview_proposal_conversion(values, tuple(participating))
+        provenance = dict(preview.provenance)
+        provenance.setdefault("run_id", run_id)
+        return ConversionPreview(
+            preview.cells,
+            preview.source_proposal_ids,
+            provenance,
+        )
+
+    def _confirm_project_proposal_conversion(
+        self,
+        project_path: str | Path,
+        image_asset_id: str,
+        preview,
+    ):
+        """Persist a checked active-project conversion and refresh the view."""
+
+        record = confirm_proposal_conversion(
+            project_path,
+            preview,
+            image_asset_id,
+            confirmed=True,
+            actor="Algorithm Engineer",
+        )
+        if (
+            self._grid_project_path is not None
+            and self._current_image_asset is not None
+            and self._grid_project_path == Path(project_path).expanduser().resolve()
+            and self._current_image_asset.image_asset_id == image_asset_id
+        ):
+            annotations = dict(self._image_view.annotations)
+            for cell in preview.cells:
+                annotation = load_grid_annotation(
+                    project_path,
+                    image_asset_id,
+                    cell.row,
+                    cell.column,
+                )
+                if annotation is not None:
+                    annotations[(annotation.row, annotation.column)] = annotation.class_codes
+            self._image_view.set_annotations(annotations)
+            self._refresh_review_controls()
+        self.statusBar().showMessage(
+            f"Converted {len(record.affected_cells)} cell(s) to Grid Annotations."
+        )
+        return record
 
     def _configure_project_proposal_generation(self, run_id: str) -> None:
         project_path = self._active_project_path

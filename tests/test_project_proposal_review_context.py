@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QDockWidget,
     QLabel,
@@ -19,10 +20,12 @@ from PySide6.QtWidgets import (
 )
 
 import tests.test_proposal_review as proposal_review_test
+from wafer_defect_studio.annotation import load_grid_annotation
 from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.main_window import MainWindow
 from wafer_defect_studio.proposal_generation import DefectProposal
 from wafer_defect_studio.proposal_review import load_proposal_revisions, record_review
+from wafer_defect_studio.proposal_conversion_store import load_proposal_conversion
 from wafer_defect_studio.proposal_store import save_defect_proposal
 
 
@@ -233,6 +236,125 @@ class ProjectProposalReviewContextTest(unittest.TestCase):
                 window.close()
                 window.deleteLater()
                 app.processEvents()
+
+    def test_review_workspace_confirms_conversion_and_records_provenance(self):
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project_path, run_id, profile_id = (
+                proposal_review_test.ProposalReviewTest()._project_with_detection_run(root)
+            )
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
+                connection.execute(
+                    "INSERT INTO grid_profiles VALUES (?, ?, ?, ?)",
+                    ("grid-1", 1, 32, 24),
+                )
+                connection.execute(
+                    "INSERT INTO image_grid_placements VALUES (?, ?, ?, ?, ?)",
+                    ("image-1", "grid-1", 1, 0, 0),
+                )
+                connection.execute(
+                    "INSERT INTO effective_wafer_areas VALUES (?, ?, ?, ?)",
+                    (
+                        "image-1",
+                        "ellipse",
+                        json.dumps(
+                            {
+                                "center_x": 64,
+                                "center_y": 48,
+                                "radius_x": 64,
+                                "radius_y": 48,
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        1,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO defect_classes "
+                    "(code, name, color, icon, description, display_order, enabled) "
+                    "VALUES (?, ?, ?, '', '', ?, 1)",
+                    ("scratch", "Scratch", "#cc4444", 0),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            proposal = DefectProposal(
+                "proposal-1",
+                "scratch",
+                Rect(43, 33, 5, 4),
+                12,
+                0.91,
+                0.74,
+                {
+                    "detection_run_id": run_id,
+                    "profile_id": profile_id,
+                    "image_asset_id": "image-1",
+                },
+            )
+            save_defect_proposal(
+                project_path,
+                proposal,
+                detection_run_id=run_id,
+                profile_id=profile_id,
+            )
+            record_review(project_path, proposal.proposal_id, "accepted", actor="engineer")
+            database = project_path / "project.sqlite"
+            before = database.read_bytes()
+            settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
+            window = MainWindow(settings=settings)
+            window.show()
+            app.processEvents()
+            try:
+                with patch.object(
+                    QFileDialog,
+                    "getExistingDirectory",
+                    return_value=str(project_path),
+                ):
+                    window.open_project_action.trigger()
+                window.workspace_actions["Review"].trigger()
+                app.processEvents()
+                window.findChild(QPushButton, "previewConversionButton").click()
+                app.processEvents()
+                self.assertEqual(database.read_bytes(), before)
+                confirmation = window.findChild(
+                    QCheckBox,
+                    "proposalConversionConfirmCheckBox",
+                )
+                convert = window.findChild(
+                    QPushButton,
+                    "convertToGridAnnotationsButton",
+                )
+                confirmation.click()
+                self.assertTrue(convert.isEnabled())
+                convert.click()
+                app.processEvents()
+                self.assertIn(
+                    "Converted",
+                    window.findChild(QLabel, "proposalConversionStatusLabel").text(),
+                )
+            finally:
+                window.close()
+                window.deleteLater()
+                app.processEvents()
+            self.assertNotEqual(database.read_bytes(), before)
+            self.assertEqual(
+                load_grid_annotation(project_path, "image-1", 1, 1).class_codes,
+                ("scratch",),
+            )
+            connection = sqlite3.connect(database)
+            try:
+                conversion_id = connection.execute(
+                    "SELECT conversion_id FROM proposal_conversions"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            conversion = load_proposal_conversion(project_path, conversion_id)
+            self.assertEqual(conversion.proposal_ids, ("proposal-1",))
+            self.assertEqual(conversion.provenance["run_id"], run_id)
+            self.assertEqual(conversion.provenance["profile_id"], profile_id)
 
 
 if __name__ == "__main__":
