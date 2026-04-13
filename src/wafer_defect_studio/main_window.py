@@ -44,6 +44,7 @@ from .effective_area import (
 )
 from .grid_controls import GridProfileControls
 from .grid_geometry import annotation_grids
+from .detection_windows import Rect
 from .grid_profile import (
     GridProfile,
     GridProfileConflictError,
@@ -351,6 +352,8 @@ class MainWindow(QMainWindow):
         )
         self._active_project_path: Path | None = None
         self._current_workspace = self.WORKSPACES[0]
+        self._proposal_review_context_restoring = False
+        self._result_export_context_restoring = False
         self.workspace_toolbar = QToolBar("Workspace Navigation", self)
         self.workspace_toolbar.setObjectName("workspaceToolbar")
         self.workspace_toolbar.setAccessibleName("Workspace navigation")
@@ -732,6 +735,22 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._result_export_dock)
         self._result_export_dock.setEnabled(False)
         self._result_export_dock.hide()
+        self._proposal_review_controls.status_filter.currentIndexChanged.connect(
+            self._on_proposal_review_context_changed
+        )
+        for widget in (
+            self._proposal_review_controls.low_confidence_checkbox,
+            self._proposal_review_controls.conflict_checkbox,
+            self._proposal_review_controls.disagreement_checkbox,
+        ):
+            widget.toggled.connect(self._on_proposal_review_context_changed)
+        for widget in (
+            self._result_export_controls.csv_path_edit,
+            self._result_export_controls.json_path_edit,
+            self._result_export_controls.png_path_edit,
+            self._result_export_controls.selected_class_edit,
+        ):
+            widget.textChanged.connect(self._on_result_export_context_changed)
         self._jobs_controls = JobsControls()
         self._jobs_dock = QDockWidget("Jobs", self)
         self._jobs_dock.setObjectName("jobsDock")
@@ -850,6 +869,7 @@ class MainWindow(QMainWindow):
         self._active_project_path = project_info.path
         self._settings.setValue(self._ACTIVE_PROJECT_KEY, str(project_info.path))
         self._settings.sync()
+        self._restore_result_export_context(project_info)
         self._set_workspace_actions_enabled(True)
         self.import_wafer_image_action.setEnabled(True)
         self._create_data_group_button.setEnabled(True)
@@ -1754,6 +1774,111 @@ class MainWindow(QMainWindow):
             return
         self._evaluation_input_controls.combo.setCurrentIndex(index)
 
+    @staticmethod
+    def _proposal_review_context_key(project_info, field: str) -> str:
+        return f"proposalReviewContext/{project_info.project_id}/{field}"
+
+    @staticmethod
+    def _result_export_context_key(project_info, field: str) -> str:
+        return f"resultExportContext/{project_info.project_id}/{field}"
+
+    @staticmethod
+    def _setting_bool(value: object, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "no", "off", ""}
+
+    def _save_proposal_review_context(self) -> None:
+        if self._active_project_path is None or self._proposal_review_context_restoring:
+            return
+        try:
+            project_info = project.open_project(self._active_project_path)
+        except Exception:
+            return
+        controls = self._proposal_review_controls
+        values = {
+            "statusFilter": controls.status_filter.currentText(),
+            "lowConfidence": controls.low_confidence_checkbox.isChecked(),
+            "conflictOnly": controls.conflict_checkbox.isChecked(),
+            "disagreementOnly": controls.disagreement_checkbox.isChecked(),
+        }
+        for field, value in values.items():
+            self._settings.setValue(self._proposal_review_context_key(project_info, field), value)
+        self._settings.sync()
+
+    def _on_proposal_review_context_changed(self, *_args) -> None:
+        self._save_proposal_review_context()
+
+    def _restore_proposal_review_context(self, project_info) -> None:
+        controls = self._proposal_review_controls
+        self._proposal_review_context_restoring = True
+        try:
+            status = str(
+                self._settings.value(
+                    self._proposal_review_context_key(project_info, "statusFilter"),
+                    "All",
+                )
+                or "All"
+            )
+            status_index = controls.status_filter.findText(status)
+            controls.status_filter.setCurrentIndex(status_index if status_index >= 0 else 0)
+            for widget, field in (
+                (controls.low_confidence_checkbox, "lowConfidence"),
+                (controls.conflict_checkbox, "conflictOnly"),
+                (controls.disagreement_checkbox, "disagreementOnly"),
+            ):
+                widget.setChecked(
+                    self._setting_bool(
+                        self._settings.value(
+                            self._proposal_review_context_key(project_info, field),
+                            False,
+                        )
+                    )
+                )
+        finally:
+            self._proposal_review_context_restoring = False
+
+    def _save_result_export_context(self) -> None:
+        if self._active_project_path is None or self._result_export_context_restoring:
+            return
+        try:
+            project_info = project.open_project(self._active_project_path)
+        except Exception:
+            return
+        controls = self._result_export_controls
+        values = {
+            "csvPath": controls.csv_path_edit.text(),
+            "jsonPath": controls.json_path_edit.text(),
+            "pngPath": controls.png_path_edit.text(),
+            "selectedClass": controls.selected_class_edit.text(),
+        }
+        for field, value in values.items():
+            self._settings.setValue(self._result_export_context_key(project_info, field), value)
+        self._settings.sync()
+
+    def _on_result_export_context_changed(self, *_args) -> None:
+        self._save_result_export_context()
+
+    def _restore_result_export_context(self, project_info) -> None:
+        controls = self._result_export_controls
+        self._result_export_context_restoring = True
+        try:
+            for widget, field in (
+                (controls.csv_path_edit, "csvPath"),
+                (controls.json_path_edit, "jsonPath"),
+                (controls.png_path_edit, "pngPath"),
+                (controls.selected_class_edit, "selectedClass"),
+            ):
+                value = self._settings.value(
+                    self._result_export_context_key(project_info, field),
+                    "",
+                )
+                widget.setText(str(value or ""))
+        finally:
+            self._result_export_context_restoring = False
+
     def configure_evaluation(
         self,
         evaluation,
@@ -1893,7 +2018,11 @@ class MainWindow(QMainWindow):
         project_path = self._active_project_path
         run_id = self._detection_input_controls.run_combo.currentData()
         if project_path is None or not run_id:
-            self._proposal_review_controls.configure((), None, None)
+            self._proposal_review_context_restoring = True
+            try:
+                self._proposal_review_controls.configure((), None, None)
+            finally:
+                self._proposal_review_context_restoring = False
             self._proposal_review_controls.status_label.setText(
                 "No completed Detection Run is selected."
             )
@@ -1913,7 +2042,11 @@ class MainWindow(QMainWindow):
             }
             queue = build_review_queue(proposals, revisions)
         except Exception as error:
-            self._proposal_review_controls.configure((), None, None)
+            self._proposal_review_context_restoring = True
+            try:
+                self._proposal_review_controls.configure((), None, None)
+            finally:
+                self._proposal_review_context_restoring = False
             self._proposal_review_controls.status_label.setText(
                 f"Proposal Review unavailable: {error}"
             )
@@ -1960,12 +2093,20 @@ class MainWindow(QMainWindow):
                 tuple(items),
             )
 
-        self._proposal_review_controls.configure(
-            queue,
-            review_callback,
-            conversion_preview_callback,
-            export_preparation_callback,
-        )
+        self._proposal_review_context_restoring = True
+        try:
+            self._proposal_review_controls.configure(
+                queue,
+                review_callback,
+                conversion_preview_callback,
+                export_preparation_callback,
+            )
+        finally:
+            self._proposal_review_context_restoring = False
+        try:
+            self._restore_proposal_review_context(project.open_project(project_path))
+        except Exception:
+            self._proposal_review_context_restoring = False
         self._proposal_review_controls.status_label.setText(
             f"{len(queue)} proposal(s) loaded for Detection Run {run_id}."
             if queue
@@ -2187,6 +2328,13 @@ class MainWindow(QMainWindow):
                     )
                 )
 
+        saved_class = str(
+            self._settings.value(
+                self._result_export_context_key(project_info, "selectedClass"),
+                "",
+            )
+            or ""
+        ).strip()
         self.configure_result_export(
             source_image,
             rows,
@@ -2194,6 +2342,8 @@ class MainWindow(QMainWindow):
             confidence_map=confidence_map,
             grid_rects=grid_rects,
         )
+        if saved_class and any(row.class_name == saved_class for row in rows):
+            self._result_export_controls.selected_class_edit.setText(saved_class)
         return rows
 
     def _configure_project_proposal_generation(self, run_id: str) -> None:

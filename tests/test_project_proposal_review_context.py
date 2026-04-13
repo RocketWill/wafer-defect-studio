@@ -14,6 +14,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QDockWidget,
     QLabel,
@@ -423,6 +424,7 @@ class ProjectProposalReviewContextTest(unittest.TestCase):
                 window.show_wafer_image(asset)
                 window.workspace_actions["Review"].trigger()
                 app.processEvents()
+                window.findChild(QComboBox, "proposalStatusFilter").setCurrentText("Accepted")
                 prepare = window.findChild(QPushButton, "prepareResultExportButton")
                 self.assertTrue(prepare.isEnabled())
                 prepare.click()
@@ -461,6 +463,195 @@ class ProjectProposalReviewContextTest(unittest.TestCase):
                 app.processEvents()
             self.assertTrue(all(path.is_file() for path in destinations))
             self.assertEqual(database.read_bytes(), before)
+
+            settings2 = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
+            window2 = MainWindow(settings=settings2)
+            window2.show()
+            app.processEvents()
+            try:
+                reopened_asset = next(
+                    item.asset
+                    for item in image_asset.load_image_assets(project_path)
+                    if item.asset.image_asset_id == "image-1"
+                )
+                window2.show_wafer_image(reopened_asset)
+                window2.workspace_actions["Data"].trigger()
+                window2.workspace_actions["Review"].trigger()
+                app.processEvents()
+                self.assertEqual(
+                    window2.findChild(QComboBox, "proposalStatusFilter").currentText(),
+                    "Accepted",
+                )
+                window2.findChild(QPushButton, "prepareResultExportButton").click()
+                app.processEvents()
+                self.assertEqual(
+                    window2.findChild(QLineEdit, "resultExportCsvPathEdit").text(),
+                    str(destinations[0]),
+                )
+            finally:
+                window2.close()
+                window2.deleteLater()
+                app.processEvents()
+
+    def test_phase2_gui_smoke_reviews_converts_exports_and_restores_context(self):
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project_path, run_id, profile_id = (
+                proposal_review_test.ProposalReviewTest()._project_with_detection_run(root)
+            )
+            source_path = root / "wafer.png"
+            source = QImage(128, 96, QImage.Format_Grayscale8)
+            source.fill(80)
+            self.assertTrue(source.save(str(source_path), "PNG"))
+            fingerprint = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
+                connection.execute(
+                    "UPDATE image_assets SET path = ?, width = ?, height = ?, fingerprint = ? "
+                    "WHERE image_asset_id = ?",
+                    (str(source_path), 128, 96, fingerprint, "image-1"),
+                )
+                connection.execute(
+                    "INSERT INTO grid_profiles VALUES (?, ?, ?, ?)",
+                    ("grid-1", 1, 32, 24),
+                )
+                connection.execute(
+                    "INSERT INTO image_grid_placements VALUES (?, ?, ?, ?, ?)",
+                    ("image-1", "grid-1", 1, 0, 0),
+                )
+                connection.execute(
+                    "INSERT INTO effective_wafer_areas VALUES (?, ?, ?, ?)",
+                    (
+                        "image-1",
+                        "ellipse",
+                        json.dumps(
+                            {
+                                "center_x": 64,
+                                "center_y": 48,
+                                "radius_x": 64,
+                                "radius_y": 48,
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        1,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO defect_classes "
+                    "(code, name, color, icon, description, display_order, enabled) "
+                    "VALUES (?, ?, ?, '', '', ?, 1)",
+                    ("scratch", "Scratch", "#cc4444", 0),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            proposal = DefectProposal(
+                "proposal-1",
+                "scratch",
+                Rect(43, 33, 5, 4),
+                12,
+                0.91,
+                0.74,
+                {
+                    "detection_run_id": run_id,
+                    "profile_id": profile_id,
+                    "image_asset_id": "image-1",
+                },
+            )
+            save_defect_proposal(
+                project_path,
+                proposal,
+                detection_run_id=run_id,
+                profile_id=profile_id,
+            )
+            settings_path = root / "settings.ini"
+            settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+            window = MainWindow(settings=settings)
+            window.show()
+            app.processEvents()
+            destinations = tuple(root / f"smoke.{suffix}" for suffix in ("csv", "json", "png"))
+            try:
+                with patch.object(
+                    QFileDialog,
+                    "getExistingDirectory",
+                    return_value=str(project_path),
+                ):
+                    window.open_project_action.trigger()
+                asset = next(
+                    item.asset
+                    for item in image_asset.load_image_assets(project_path)
+                    if item.asset.image_asset_id == "image-1"
+                )
+                window.show_wafer_image(asset)
+                window.workspace_actions["Review"].trigger()
+                app.processEvents()
+                table = window.findChild(QTableWidget, "proposalListWidget")
+                table.selectRow(0)
+                window.findChild(QPushButton, "acceptProposalButton").click()
+                window.findChild(QPushButton, "previewConversionButton").click()
+                app.processEvents()
+                window.findChild(QCheckBox, "proposalConversionConfirmCheckBox").click()
+                window.findChild(QPushButton, "convertToGridAnnotationsButton").click()
+                app.processEvents()
+                self.assertEqual(
+                    load_grid_annotation(project_path, "image-1", 1, 1).class_codes,
+                    ("scratch",),
+                )
+                prepare = window.findChild(QPushButton, "prepareResultExportButton")
+                self.assertTrue(prepare.isEnabled())
+                prepare.click()
+                for edit, destination in zip(
+                    (
+                        window.findChild(QLineEdit, "resultExportCsvPathEdit"),
+                        window.findChild(QLineEdit, "resultExportJsonPathEdit"),
+                        window.findChild(QLineEdit, "resultExportPngPathEdit"),
+                    ),
+                    destinations,
+                ):
+                    edit.setText(str(destination))
+                export_button = window.findChild(QPushButton, "exportResultButton")
+                self.assertTrue(export_button.isEnabled())
+                export_button.click()
+                app.processEvents()
+                self.assertIn(
+                    "Exported",
+                    window.findChild(QLabel, "resultExportStatusLabel").text(),
+                )
+                self.assertTrue(all(path.is_file() for path in destinations))
+            finally:
+                window.close()
+                window.deleteLater()
+                app.processEvents()
+
+            settings2 = QSettings(str(settings_path), QSettings.Format.IniFormat)
+            window2 = MainWindow(settings=settings2)
+            window2.show()
+            app.processEvents()
+            try:
+                reopened_asset = next(
+                    item.asset
+                    for item in image_asset.load_image_assets(project_path)
+                    if item.asset.image_asset_id == "image-1"
+                )
+                window2.show_wafer_image(reopened_asset)
+                window2.workspace_actions["Data"].trigger()
+                window2.workspace_actions["Review"].trigger()
+                app.processEvents()
+                self.assertEqual(
+                    window2.findChild(QComboBox, "proposalStatusFilter").currentText(),
+                    "All",
+                )
+                window2.findChild(QPushButton, "prepareResultExportButton").click()
+                self.assertEqual(
+                    window2.findChild(QLineEdit, "resultExportJsonPathEdit").text(),
+                    str(destinations[1]),
+                )
+            finally:
+                window2.close()
+                window2.deleteLater()
+                app.processEvents()
 
 
 if __name__ == "__main__":
