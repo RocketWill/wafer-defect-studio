@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sqlite3
@@ -9,17 +10,20 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
     QDockWidget,
     QLabel,
+    QLineEdit,
     QPushButton,
     QTableWidget,
 )
 
 import tests.test_proposal_review as proposal_review_test
+from wafer_defect_studio import image_asset
 from wafer_defect_studio.annotation import load_grid_annotation
 from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.main_window import MainWindow
@@ -355,6 +359,108 @@ class ProjectProposalReviewContextTest(unittest.TestCase):
             self.assertEqual(conversion.proposal_ids, ("proposal-1",))
             self.assertEqual(conversion.provenance["run_id"], run_id)
             self.assertEqual(conversion.provenance["profile_id"], profile_id)
+
+    def test_review_workspace_prepares_and_publishes_active_project_exports(self):
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project_path, run_id, profile_id = (
+                proposal_review_test.ProposalReviewTest()._project_with_detection_run(root)
+            )
+            source_path = root / "wafer.png"
+            source = QImage(128, 96, QImage.Format_Grayscale8)
+            source.fill(80)
+            self.assertTrue(source.save(str(source_path), "PNG"))
+            fingerprint = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            connection = sqlite3.connect(project_path / "project.sqlite")
+            try:
+                connection.execute(
+                    "UPDATE image_assets SET path = ?, width = ?, height = ?, fingerprint = ? "
+                    "WHERE image_asset_id = ?",
+                    (str(source_path), 128, 96, fingerprint, "image-1"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            proposal = DefectProposal(
+                "proposal-1",
+                "scratch",
+                Rect(43, 33, 5, 4),
+                12,
+                0.91,
+                0.74,
+                {
+                    "detection_run_id": run_id,
+                    "profile_id": profile_id,
+                    "image_asset_id": "image-1",
+                },
+            )
+            save_defect_proposal(
+                project_path,
+                proposal,
+                detection_run_id=run_id,
+                profile_id=profile_id,
+            )
+            record_review(project_path, proposal.proposal_id, "accepted", actor="engineer")
+            database = project_path / "project.sqlite"
+            before = database.read_bytes()
+            settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
+            window = MainWindow(settings=settings)
+            window.show()
+            app.processEvents()
+            try:
+                with patch.object(
+                    QFileDialog,
+                    "getExistingDirectory",
+                    return_value=str(project_path),
+                ):
+                    window.open_project_action.trigger()
+                asset = next(
+                    item.asset
+                    for item in image_asset.load_image_assets(project_path)
+                    if item.asset.image_asset_id == "image-1"
+                )
+                window.show_wafer_image(asset)
+                window.workspace_actions["Review"].trigger()
+                app.processEvents()
+                prepare = window.findChild(QPushButton, "prepareResultExportButton")
+                self.assertTrue(prepare.isEnabled())
+                prepare.click()
+                app.processEvents()
+                export_dock = window.findChild(QDockWidget, "resultExportDock")
+                self.assertTrue(export_dock.isVisible())
+                self.assertEqual(
+                    window.findChild(QLineEdit, "resultExportSelectedClassEdit").text(),
+                    "scratch",
+                )
+                destinations = (
+                    root / "result.csv",
+                    root / "result.json",
+                    root / "result.png",
+                )
+                for edit, destination in zip(
+                    (
+                        window.findChild(QLineEdit, "resultExportCsvPathEdit"),
+                        window.findChild(QLineEdit, "resultExportJsonPathEdit"),
+                        window.findChild(QLineEdit, "resultExportPngPathEdit"),
+                    ),
+                    destinations,
+                ):
+                    edit.setText(str(destination))
+                export_button = window.findChild(QPushButton, "exportResultButton")
+                self.assertTrue(export_button.isEnabled())
+                export_button.click()
+                app.processEvents()
+                self.assertIn(
+                    "Exported",
+                    window.findChild(QLabel, "resultExportStatusLabel").text(),
+                )
+            finally:
+                window.close()
+                window.deleteLater()
+                app.processEvents()
+            self.assertTrue(all(path.is_file() for path in destinations))
+            self.assertEqual(database.read_bytes(), before)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from uuid import uuid4
 import numpy as np
 
 from PySide6.QtCore import QPoint, QSettings, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtGui import QAction, QActionGroup, QImage
 from PySide6.QtWidgets import (
     QCheckBox,
     QDockWidget,
@@ -98,6 +98,7 @@ from .proposal_conversion_store import confirm_proposal_conversion
 from .proposal_controls import ProposalReviewControls, ReviewCallback
 from .conversion_controls import ProposalConversionControls, ConversionCallback
 from .export_controls import ExportCallback, ResultExportControls
+from .result_export import ExportContext, build_reviewed_rows
 from .job_controls import JobsActionCallback, JobsControls
 from .job_recovery import recover_stale_jobs
 from .job_store import list_jobs
@@ -393,6 +394,7 @@ class MainWindow(QMainWindow):
         self.import_wafer_image_action.triggered.connect(self._import_wafer_image)
         file_menu.addAction(self.import_wafer_image_action)
         self._loaded_wafer_image: LoadedWaferImage | None = None
+        self._source_image: QImage | None = None
         self._image_view = WaferView()
         self.setCentralWidget(self._image_view)
         self._data_workspace = QWidget(self)
@@ -769,6 +771,12 @@ class MainWindow(QMainWindow):
         self._evaluation_dock.setVisible(workspace == "Evaluate")
         self._detection_dock.setVisible(workspace == "Detect")
         self._proposal_review_dock.setVisible(workspace == "Review")
+        self._proposal_conversion_dock.setVisible(
+            workspace == "Review" and self._proposal_conversion_dock.isEnabled()
+        )
+        self._result_export_dock.setVisible(
+            workspace == "Review" and self._result_export_dock.isEnabled()
+        )
         if workspace == "Review":
             self._refresh_project_proposal_review()
         self.workspaceChanged.emit(workspace)
@@ -1491,6 +1499,7 @@ class MainWindow(QMainWindow):
         loaded, image = _decode_wafer_image(asset.path)
         self._project_hub_dock.hide()
         self._loaded_wafer_image = loaded
+        self._source_image = image.copy()
         self._image_view._set_loaded_image(loaded, image)
         self._set_current_image_asset(asset)
         QTimer.singleShot(0, self._image_view._fit_image)
@@ -1891,6 +1900,8 @@ class MainWindow(QMainWindow):
             self._proposal_review_dock.setEnabled(False)
             self._proposal_conversion_dock.setEnabled(False)
             self._proposal_conversion_dock.hide()
+            self._result_export_dock.setEnabled(False)
+            self._result_export_dock.hide()
             return
         try:
             proposals = load_defect_proposals(project_path, detection_run_id=str(run_id))
@@ -1909,6 +1920,8 @@ class MainWindow(QMainWindow):
             self._proposal_review_dock.setEnabled(False)
             self._proposal_conversion_dock.setEnabled(False)
             self._proposal_conversion_dock.hide()
+            self._result_export_dock.setEnabled(False)
+            self._result_export_dock.hide()
             return
 
         def review_callback(proposal_id, status, source_rect, provenance):
@@ -1940,10 +1953,18 @@ class MainWindow(QMainWindow):
             )
             return preview
 
+        def export_preparation_callback(items):
+            return self._prepare_project_result_export(
+                project_path,
+                str(run_id),
+                tuple(items),
+            )
+
         self._proposal_review_controls.configure(
             queue,
             review_callback,
             conversion_preview_callback,
+            export_preparation_callback,
         )
         self._proposal_review_controls.status_label.setText(
             f"{len(queue)} proposal(s) loaded for Detection Run {run_id}."
@@ -2076,6 +2097,104 @@ class MainWindow(QMainWindow):
             f"Converted {len(record.affected_cells)} cell(s) to Grid Annotations."
         )
         return record
+
+    def _prepare_project_result_export(
+        self,
+        project_path: str | Path,
+        run_id: str,
+        items,
+    ):
+        """Bind active-project reviewed rows and native source export values."""
+
+        values = tuple(items)
+        if not values:
+            raise ValueError("Review at least one Proposal before export")
+        image_asset_id = self._project_conversion_image_asset_id(
+            project_path,
+            run_id,
+            values,
+        )
+        run = load_detection_run(project_path, run_id)
+        profile = load_detection_profile(project_path, run.profile_id)
+        project_info = project.open_project(project_path)
+        assets = image_asset.load_image_assets(project_path)
+        reopened = next(
+            (
+                candidate
+                for candidate in assets
+                if candidate.asset.image_asset_id == image_asset_id
+            ),
+            None,
+        )
+        if reopened is None or reopened.source_health is not SourceHealth.AVAILABLE:
+            health = "missing" if reopened is None else reopened.source_health.value
+            raise ValueError(f"Source image is unavailable: {image_asset_id} ({health})")
+
+        if (
+            self._current_image_asset is not None
+            and self._current_image_asset.image_asset_id == image_asset_id
+            and self._source_image is not None
+            and not self._source_image.isNull()
+        ):
+            source_image = self._source_image.copy()
+        else:
+            _loaded, source_image = _decode_wafer_image(reopened.asset.path)
+
+        rows = build_reviewed_rows(
+            values,
+            context=ExportContext(
+                project_id=project_info.project_id,
+                image_asset_id=image_asset_id,
+                run_id=run_id,
+                profile_id=profile.profile_id,
+                thresholds=profile.thresholds,
+            ),
+        )
+        if not rows:
+            raise ValueError("Review at least one Proposal before export")
+
+        selected_class = rows[0].class_name
+        confidence_map = None
+        artifact = self._detection_controls.artifact
+        if artifact is not None:
+            try:
+                confidence_map = artifact.class_map(selected_class)
+            except KeyError:
+                confidence_map = None
+
+        grid_rects = ()
+        placement = load_image_grid_placement(project_path, image_asset_id)
+        if placement is not None:
+            placed_profile = next(
+                (
+                    candidate
+                    for candidate in load_grid_profiles(project_path)
+                    if candidate.grid_profile_id == placement.grid_profile_id
+                    and candidate.version == placement.grid_profile_version
+                ),
+                None,
+            )
+            if placed_profile is not None:
+                grid_rects = tuple(
+                    Rect(grid.x, grid.y, grid.width, grid.height)
+                    for grid in annotation_grids(
+                        reopened.asset.width,
+                        reopened.asset.height,
+                        placed_profile.cell_width,
+                        placed_profile.cell_height,
+                        placement.origin_x,
+                        placement.origin_y,
+                    )
+                )
+
+        self.configure_result_export(
+            source_image,
+            rows,
+            selected_class,
+            confidence_map=confidence_map,
+            grid_rects=grid_rects,
+        )
+        return rows
 
     def _configure_project_proposal_generation(self, run_id: str) -> None:
         project_path = self._active_project_path
@@ -2673,6 +2792,7 @@ class MainWindow(QMainWindow):
             return
         self._project_hub_dock.hide()
         self._loaded_wafer_image = loaded
+        self._source_image = image.copy()
         self._image_view._set_loaded_image(loaded, image)
         if asset is not None:
             self._set_current_image_asset(asset)

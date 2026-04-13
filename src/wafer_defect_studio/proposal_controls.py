@@ -34,6 +34,7 @@ from .proposal_queue import ReviewQueueFilters, ReviewQueueItem, filter_review_q
 
 ReviewCallback = Callable[[str, str, Rect, Mapping[str, Any]], Any]
 ConversionPreviewCallback = Callable[[tuple[ReviewQueueItem, ...]], ConversionPreview]
+ExportPreparationCallback = Callable[[tuple[ReviewQueueItem, ...]], Any]
 
 
 class ProposalReviewControls(QWidget):
@@ -47,6 +48,7 @@ class ProposalReviewControls(QWidget):
         self._items: tuple[ReviewQueueItem, ...] = ()
         self._review_callback: ReviewCallback | None = None
         self._conversion_preview_callback: ConversionPreviewCallback | None = None
+        self._export_preparation_callback: ExportPreparationCallback | None = None
         self._selected_proposal_id: str | None = None
 
         self.low_confidence_checkbox = QCheckBox("Low confidence (< 0.50)", self)
@@ -100,11 +102,14 @@ class ProposalReviewControls(QWidget):
         self.correct_button.setObjectName("correctProposalButton")
         self.preview_conversion_button = QPushButton("Preview Conversion", self)
         self.preview_conversion_button.setObjectName("previewConversionButton")
+        self.prepare_export_button = QPushButton("Prepare Result Export", self)
+        self.prepare_export_button.setObjectName("prepareResultExportButton")
         action_row = QHBoxLayout()
         action_row.addWidget(self.accept_button)
         action_row.addWidget(self.reject_button)
         action_row.addWidget(self.correct_button)
         action_row.addWidget(self.preview_conversion_button)
+        action_row.addWidget(self.prepare_export_button)
 
         self.status_label = QLabel("No proposals configured.", self)
         self.status_label.setObjectName("proposalReviewStatusLabel")
@@ -125,6 +130,7 @@ class ProposalReviewControls(QWidget):
         self.reject_button.clicked.connect(lambda: self._submit("rejected"))
         self.correct_button.clicked.connect(lambda: self._submit("corrected"))
         self.preview_conversion_button.clicked.connect(self._preview_conversion)
+        self.prepare_export_button.clicked.connect(self._prepare_export)
         self._set_action_enabled(False)
 
     @property
@@ -138,6 +144,7 @@ class ProposalReviewControls(QWidget):
         items: Iterable[ReviewQueueItem] | Iterable[DefectProposal],
         review_callback: ReviewCallback | None,
         conversion_preview_callback: ConversionPreviewCallback | None = None,
+        export_preparation_callback: ExportPreparationCallback | None = None,
     ) -> None:
         """Bind pure queue/proposal values and an injected review callback."""
 
@@ -145,6 +152,8 @@ class ProposalReviewControls(QWidget):
             raise TypeError("review_callback must be callable or None")
         if conversion_preview_callback is not None and not callable(conversion_preview_callback):
             raise TypeError("conversion_preview_callback must be callable or None")
+        if export_preparation_callback is not None and not callable(export_preparation_callback):
+            raise TypeError("export_preparation_callback must be callable or None")
         values = tuple(items)
         if values and all(isinstance(value, ReviewQueueItem) for value in values):
             queue = filter_review_queue(values)
@@ -157,6 +166,7 @@ class ProposalReviewControls(QWidget):
         self._items = tuple(queue)
         self._review_callback = review_callback
         self._conversion_preview_callback = conversion_preview_callback
+        self._export_preparation_callback = export_preparation_callback
         self._selected_proposal_id = None
         self.low_confidence_checkbox.setChecked(False)
         self.conflict_checkbox.setChecked(False)
@@ -165,6 +175,7 @@ class ProposalReviewControls(QWidget):
         self._refresh()
         self.status_label.setText(f"{len(self._items)} proposal(s) ready for review.")
         self._refresh_preview_enabled()
+        self._refresh_export_enabled()
 
     def _set_correction_ranges(self) -> None:
         self.correction_x_spin.setRange(0, self._SPINBOX_MAX)
@@ -220,6 +231,7 @@ class ProposalReviewControls(QWidget):
             self._selected_proposal_id = None
             self._set_action_enabled(False)
         self._refresh_preview_enabled()
+        self._refresh_export_enabled()
 
     def _selection_changed(self, row: int, _column: int, _previous_row: int, _previous_column: int) -> None:
         if row < 0 or row >= self.proposal_table.rowCount():
@@ -270,12 +282,24 @@ class ProposalReviewControls(QWidget):
         return tuple(
             item
             for item in self._items
-            if str(item.status).lower() in {"accepted", "corrected"}
+            if _status_text(item.status) in {"accepted", "corrected"}
+        )
+
+    def _reviewed_items(self) -> tuple[ReviewQueueItem, ...]:
+        return tuple(
+            item
+            for item in self._items
+            if _status_text(item.status) in {"accepted", "rejected", "corrected"}
         )
 
     def _refresh_preview_enabled(self) -> None:
         self.preview_conversion_button.setEnabled(
             self._conversion_preview_callback is not None and bool(self._convertible_items())
+        )
+
+    def _refresh_export_enabled(self) -> None:
+        self.prepare_export_button.setEnabled(
+            self._export_preparation_callback is not None and bool(self._reviewed_items())
         )
 
     def _preview_conversion(self) -> None:
@@ -294,6 +318,22 @@ class ProposalReviewControls(QWidget):
             return
         self.status_label.setText(
             f"Conversion preview ready: {len(preview.cells)} affected cell(s)."
+        )
+
+    def _prepare_export(self) -> None:
+        callback = self._export_preparation_callback
+        items = self._reviewed_items()
+        if callback is None or not items:
+            self.status_label.setText("Review at least one Proposal before export.")
+            self._refresh_export_enabled()
+            return
+        try:
+            callback(items)
+        except Exception as error:  # callback owns source/export preparation policy
+            self.status_label.setText(f"Result Export unavailable: {error}")
+            return
+        self.status_label.setText(
+            f"Result Export ready: {len(items)} reviewed proposal(s)."
         )
 
     def _submit(self, status: str) -> None:
@@ -333,14 +373,21 @@ class ProposalReviewControls(QWidget):
         self._refresh()
         self.status_label.setText(f"{status.title()} {item.proposal_id}.")
         self._refresh_preview_enabled()
+        self._refresh_export_enabled()
 
 
 def _format_rect(rect: Rect) -> str:
     return f"({rect.x}, {rect.y}, {rect.width}, {rect.height})"
 
 
+def _status_text(status: object) -> str:
+    value = getattr(status, "value", status)
+    return str(value).strip().lower()
+
+
 __all__ = [
     "ConversionPreviewCallback",
+    "ExportPreparationCallback",
     "ProposalReviewControls",
     "ReviewCallback",
 ]
