@@ -1,27 +1,65 @@
 # Wafer Defect Studio
 
-A Windows desktop MVP for source-pixel-aligned wafer grid classification. It keeps the original grayscale pixels authoritative while supporting multi-label review, reproducible training snapshots, model evaluation, approximate CAM localization, and result export.
+A Windows desktop MVP for source-pixel-aligned wafer grid classification. The
+original grayscale pixels remain authoritative while the application supports
+multi-label review, reproducible training snapshots, ResNet18 training and
+evaluation, approximate CAM localization, proposal review, conversion, and
+result export.
 
-![Current Wafer Defect Studio PySide6 editor showing a synthetic wafer, annotation grid, effective area, and review controls](docs/images/wafer-defect-studio-overview.png)
+![Wafer Defect Studio annotation workspace showing a synthetic wafer, grid, effective area, and review controls](docs/images/wafer-defect-studio-overview.png)
 
-> The screenshot is a real PySide6 Widgets render using a generated wafer image; it is not production inspection data.
+> The screenshots in this README use deterministic synthetic wafer data and
+> real PySide6 Widgets renders. They are UI evidence, not production inspection
+> data or model-accuracy claims.
 
 ## Current status
 
-The domain services and feature controls for tickets 01–14 are implemented. The desktop shell now exposes Create Project, Open Project, referenced Wafer Image import, a persistent Project Hub with recent-project source health, and GUI smoke coverage for the connected project/grid/annotation/review workflow. Training Runs now retain environment provenance; training, evaluation, and detection controls still rely on prepared service configuration rather than one fully connected end-user workflow.
+Phase 2 MVP is complete (Tickets 01–26). The intended MVP algorithm and its
+active-project desktop happy path are now connected:
+
+1. Import a native 8-bit or 16-bit grayscale wafer image.
+2. Configure a pixel-sized Grid Profile and confirmed Effective Wafer Area.
+3. Apply multi-label Grid Annotations and mark the image Reviewed.
+4. Freeze a Dataset Snapshot, train ResNet18, evaluate it, choose thresholds,
+   and approve the evaluation.
+5. Create a Detection Profile from the approved evaluation, run overlapping
+   full-resolution inference, and generate source-coordinate CAM proposals.
+6. Review proposals, preview and explicitly confirm conversion to Grid
+   Annotations, then prepare and publish CSV, JSON, and native-size PNG results.
+7. Reopen the project with the Review filters and Result Export context intact.
+
+The algorithm is complete for this Phase 2 MVP path. CAM regions and proposals
+are approximate weak localization, not pixel-accurate segmentation masks.
+
+### Phase 2 UI snapshots
+
+<p>
+  <img alt="Phase 2 Proposal Review queue" src="docs/images/phase2-review.png" width="32%">
+  <img alt="Phase 2 Proposal Conversion preview" src="docs/images/phase2-conversion.png" width="32%">
+  <img alt="Phase 2 Result Export controls" src="docs/images/phase2-result-export.png" width="32%">
+</p>
 
 ## Capabilities
 
 - Import and retain native 8-bit or 16-bit grayscale source pixels.
 - Define versioned pixel-sized Grid Profiles and per-image grid origins.
-- Confirm ellipse or polygon Effective Wafer Areas with strict center-point participation.
+- Confirm ellipse or polygon Effective Wafer Areas with strict center-point
+  participation.
 - Create multi-label Grid Annotations and track Reviewed state separately.
-- Freeze Training Scopes, Dataset Snapshots, deterministic image-level splits, and normalization bounds.
-- Run isolated PyTorch training, evaluation, and detection workers with persisted job state and recovery.
-- Validate and approve Training Runs, review Defect Proposals, and convert accepted proposals into annotations.
-- Export CSV, JSON, and PNG results in source-image pixel coordinates.
+- Freeze Training Scopes, Dataset Snapshots, deterministic image-level splits,
+  and normalization bounds.
+- Run isolated PyTorch ResNet18 training, evaluation, threshold selection, and
+  approval workers with persisted job state and recovery.
+- Create approved-evaluation Detection Profiles, run overlapping-window CAM
+  detection, and persist source-coordinate Detection Runs and Proposals.
+- Review Proposals with append-only Accept/Reject/Correct revisions.
+- Preview and explicitly confirm Proposal-to-Grid Annotation conversion with
+  run/profile/proposal provenance.
+- Export reviewed results as CSV, JSON, and PNG with source-image coordinates,
+  selected-class CAM context, and grid/proposal overlays.
 
-CAM and proposal regions are approximate weak localization, not pixel-accurate segmentation masks.
+SQLite is the local source of truth. Source-image pixel coordinates are
+authoritative throughout annotation, localization, conversion, and export.
 
 ## Requirements
 
@@ -30,9 +68,11 @@ CAM and proposal regions are approximate weak localization, not pixel-accurate s
 - PySide6 6.6 or newer
 - NumPy
 - PyTorch and torchvision
-- CUDA is optional; GPU execution requires a compatible PyTorch build, NVIDIA driver, and available device.
+- CUDA is optional; GPU execution requires a compatible PyTorch build, NVIDIA
+  driver, and an available device.
 
-The source tree currently declares only PySide6 in `pyproject.toml`; install the ML dependencies explicitly until the package metadata is completed.
+The source tree currently declares only PySide6 in `pyproject.toml`; install the
+ML dependencies explicitly until package metadata is completed.
 
 ## Setup
 
@@ -43,13 +83,16 @@ python -m pip install numpy torch torchvision
 python -m pip install -e .
 ```
 
-For GPU use, install the CUDA-enabled PyTorch build appropriate for the machine, then verify it:
+For GPU use, install the CUDA-enabled PyTorch build appropriate for the machine,
+then verify it:
 
 ```powershell
 python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
 ```
 
-The maintained local environment used for the latest validation reported Python 3.11.15, PySide6 6.11.2, NumPy 2.4.6, PyTorch 2.13.0+cu126, torchvision 0.28.0+cu126, and CUDA available.
+The environment used for the latest local checks reported Python 3.11.15,
+PySide6 6.11.2, NumPy 2.4.6, PyTorch 2.13.0+cu126, torchvision 0.28.0+cu126,
+and CUDA available.
 
 ## Run
 
@@ -57,42 +100,61 @@ The maintained local environment used for the latest validation reported Python 
 wafer-defect-studio
 ```
 
-This launches the editor shell and Project Hub. Use the File menu to create or open a project and import a referenced Wafer Image.
+This launches the editor shell and Project Hub. Use the File menu to create or
+open a project, import a referenced Wafer Image, and move through the Data,
+Dataset, Train, Evaluate, Detect, and Review workspaces.
 
 ## Validate
 
-Run the full automated suite headlessly:
+Run the repository suite headlessly:
 
 ```powershell
 $env:QT_QPA_PLATFORM = "offscreen"
-python -m unittest discover -s tests
+python -m unittest discover -s tests -p "test*.py" -v
 ```
 
-Run the focused performance checks:
+The latest local Phase 2 evidence is recorded in
+[Ticket 26](.scratch/wafer-defect-classification/issues/26-phase2-gui-closeout.md):
+
+- Phase 2 focused suite: **29/29 passed**.
+- Full discovery: **133 passed, 4 known pre-existing Qt/offscreen
+  canvas-geometry failures** in `test_grid_controls`, `test_grid_overlay`,
+  `test_image_grid_origin`, and `test_wafer_interaction`.
+- `py_compile` and `git diff --check` passed.
+
+Those four failures are outside the active Phase 2 project path and are kept
+visible rather than reported as a green full suite. The earlier performance,
+accessibility, and service-pipeline evidence remains in the
+[MVP validation report](.scratch/wafer-defect-classification/mvp-validation-report.md).
+
+Run the focused performance checks when needed:
 
 ```powershell
 python benchmarks/first_useful_display.py
 python benchmarks/interaction_feedback.py --samples 3
 ```
 
-The latest local validation ran 98 tests successfully. Three focused GUI smoke tests cover create/import/display, grid/origin/area confirmation, and multi-label annotation/review; training through export remains service-pipeline evidence. Training Runs capture Python/ML/OS/CUDA provenance with explicit unavailable values when hardware facts cannot be read. A synthetic 20 MP `uint16` image reached first useful display in 0.218 seconds, and the measured view interactions remained below the 100 ms target. These are local/offscreen checks, not multi-machine production certification; see [the MVP validation report](.scratch/wafer-defect-classification/mvp-validation-report.md) for the exact evidence and limits.
-
 ## Project layout
 
 ```text
-src/wafer_defect_studio/   Application, domain services, workers, and Widgets
-tests/                     Unit, integration, UI-smoke, and validation tests
-benchmarks/                First-display and interaction measurements
-docs/adr/                  Architectural decisions
-docs/agents/               Domain and delivery rules
-.scratch/wafer-defect-classification/  Product spec, tickets, and validation report
+src/wafer_defect_studio/                 Application, domain services, workers, Widgets
+tests/                                   Unit, integration, UI-smoke, validation tests
+benchmarks/                              First-display and interaction measurements
+docs/images/                             README and Phase 2 UI screenshots
+docs/adr/                                Architectural decisions
+docs/agents/                             Domain and delivery rules
+.scratch/wafer-defect-classification/    Product spec, tickets, and validation evidence
 ```
 
-## Known gaps found in the repository review
+## Known limits and deferred roadmap
 
-- The service-pipeline smoke validates domain orchestration; the three GUI smoke tests separately cover the connected desktop workflow through annotation/review.
-- Runtime imports include NumPy, PyTorch, and torchvision, but `pyproject.toml` does not declare them.
-- Some UI copy says “Labeled” where the domain vocabulary calls for Grid Annotations / Defect Classes.
-- `MainWindow` and the three worker modules contain repeated wiring that is a maintainability concern, though not an immediate correctness failure.
+- `pyproject.toml` does not yet declare NumPy, PyTorch, or torchvision.
+- CAM and proposal regions remain approximate weak localization; pixel masks
+  and segmentation are intentionally out of scope.
+- Comprehensive Wafer Evaluation, multi-run comparison, ResNet50,
+  EfficientNet-B0, ONNX import/parity, active learning, backup/collect UI,
+  advanced job control, polished dark theme, layout profiles, and image
+  pyramids remain deferred.
 
-SQLite remains the single local source of truth. Source-image pixel coordinates are authoritative throughout annotation, localization, and export.
+SQLite remains the single local source of truth, and no deferred item is needed
+to exercise the Phase 2 happy path shown above.
