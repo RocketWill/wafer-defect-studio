@@ -39,6 +39,20 @@ are approximate weak localization, not pixel-accurate segmentation masks.
   <img alt="Phase 2 Result Export controls" src="docs/images/phase2-result-export.png" width="32%">
 </p>
 
+### End-to-end demo
+
+可用一個可重跑的 synthetic project 走過匯入、兩類標註、Dataset Snapshot、
+ResNet18 訓練、Evaluation approval、Detection 與 native-coordinate heatmap：
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+$env:QT_QPA_FONTDIR = "C:/Windows/Fonts"
+python docs/demo/run_phase2_demo.py
+```
+
+完整步驟、每階段截圖與 synthetic validation 邊界請參考
+[Phase 2 端到端 Demo 教學](docs/demo/phase2-end-to-end-tutorial.md)。
+
 ## Capabilities
 
 - Import and retain native 8-bit or 16-bit grayscale source pixels.

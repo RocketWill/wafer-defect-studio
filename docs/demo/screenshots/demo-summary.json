@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "source": {
+    "width": 512,
+    "height": 384,
+    "format": "uint8 PNG"
+  },
+  "classes": [
+    "scratch",
+    "particle"
+  ],
+  "training": {
+    "run_id": "788ae6c5-8805-4f78-9750-ae4b35d98be1",
+    "status": "completed",
+    "architecture": "resnet18",
+    "epochs": 1,
+    "device": "cpu",
+    "metrics": {}
+  },
+  "evaluation": {
+    "evaluation_id": "demo-evaluation",
+    "macro_f1": 1.0,
+    "target_satisfied": true,
+    "decisions": [
+      "candidate",
+      "validated",
+      "approved"
+    ]
+  },
+  "detection": {
+    "run_id": "99975041-8970-4bcb-8123-631dc9b129b2",
+    "status": "completed",
+    "class_names": [
+      "particle",
+      "scratch"
+    ],
+    "map_shape": [
+      384,
+      512,
+      2
+    ],
+    "scratch_min": 0.0,
+    "scratch_max": 1.0,
+    "heatmap": "06-heatmap.png"
+  }
+}
