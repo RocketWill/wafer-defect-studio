@@ -50,14 +50,17 @@ from wafer_defect_studio.evaluation_worker import (
     start_evaluation_worker,
 )
 from wafer_defect_studio.effective_area import (
+    confirmed_participating_grids,
     confirm_effective_wafer_area,
     load_effective_wafer_area,
     set_effective_ellipse,
 )
+from wafer_defect_studio.detection_validation import compare_detection_proposals
 from wafer_defect_studio.grid_geometry import annotation_grids
 from wafer_defect_studio.grid_profile import load_grid_profiles, save_grid_profile
 from wafer_defect_studio.image_grid_placement import set_image_grid_origin
 from wafer_defect_studio.main_window import MainWindow
+from wafer_defect_studio.proposal_generation import generate_proposals
 from wafer_defect_studio.result_export import export_proposals_png
 from wafer_defect_studio.review import mark_image_reviewed
 from wafer_defect_studio.training_run import load_training_run
@@ -83,7 +86,7 @@ def main() -> int:
             _activate_image(window, project_path, asset, grid_profile, "Project created")
             _capture(window, output / "01-import.png", app)
 
-            _prepare_annotation(window, project_path, asset, grid_profile, app)
+            annotations = _prepare_annotation(window, project_path, asset, grid_profile, app)
             window.workspace_actions["Annotate"].trigger()
             _capture(window, output / "02-annotation-two-classes.png", app)
 
@@ -147,15 +150,36 @@ def main() -> int:
             window.set_detection_artifact(artifact)
             _capture(window, output / "06-detection-controls.png", app)
 
-            heatmap_path = output / "06-heatmap.png"
             source_image = QImage(str(source_path))
+            proposals = generate_proposals(artifact, detection_profile)
+            area = load_effective_wafer_area(project_path, asset.image_asset_id)
+            if area is None:
+                raise RuntimeError("demo Effective Wafer Area is missing")
+            participating = confirmed_participating_grids(
+                annotation_grids(
+                    source_image.width(),
+                    source_image.height(),
+                    grid_profile.cell_width,
+                    grid_profile.cell_height,
+                    0,
+                    0,
+                ),
+                area,
+            )
+            validation = compare_detection_proposals(
+                annotations,
+                proposals,
+                participating,
+                class_names=("scratch", "particle"),
+            )
+            heatmap_path = output / "06-heatmap.png"
             grid_rects = tuple(
                 (grid.x, grid.y, grid.width, grid.height)
                 for grid in annotation_grids(
                     source_image.width(),
                     source_image.height(),
-                    detection_profile.window_width,
-                    detection_profile.window_height,
+                    grid_profile.cell_width,
+                    grid_profile.cell_height,
                     0,
                     0,
                 )
@@ -177,6 +201,7 @@ def main() -> int:
                 detection_run_id,
                 artifact,
                 heatmap_path,
+                validation,
             )
             (output / "demo-summary.json").write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
@@ -284,7 +309,7 @@ def _activate_image(window, project_path, asset, profile, status: str) -> None:
     window.set_grid_profile(project_path, profile)
 
 
-def _prepare_annotation(window, project_path, asset, profile, app) -> None:
+def _prepare_annotation(window, project_path, asset, profile, app):
     annotations = {
         (4, 5): ("scratch",),
         (5, 8): ("particle",),
@@ -300,6 +325,10 @@ def _prepare_annotation(window, project_path, asset, profile, app) -> None:
     window.set_annotation_mode("Annotate")
     window._refresh_review_controls()
     app.processEvents()
+    return tuple(
+        GridAnnotation(asset.image_asset_id, row, column, class_codes)
+        for (row, column), class_codes in annotations.items()
+    )
 
 
 def _create_dataset(project_path: Path) -> tuple[str, str]:
@@ -447,7 +476,16 @@ def _wait(app: QApplication, predicate, timeout: float = 30.0) -> None:
     raise TimeoutError("demo stage timed out")
 
 
-def _summary(project_path, source_image, training_id, evaluation_id, detection_id, artifact, heatmap_path):
+def _summary(
+    project_path,
+    source_image,
+    training_id,
+    evaluation_id,
+    detection_id,
+    artifact,
+    heatmap_path,
+    validation,
+):
     training = load_training_run(project_path, training_id)
     evaluation = load_evaluation(project_path, evaluation_id)
     detection = load_detection_run(project_path, detection_id)
@@ -479,6 +517,7 @@ def _summary(project_path, source_image, training_id, evaluation_id, detection_i
             "scratch_max": float(np.max(finite)) if finite.size else None,
             "heatmap": str(heatmap_path.name),
         },
+        "annotation_validation": validation.to_dict(),
     }
 
 

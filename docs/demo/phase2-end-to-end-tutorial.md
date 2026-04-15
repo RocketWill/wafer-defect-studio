@@ -32,10 +32,13 @@ python docs/demo/run_phase2_demo.py --output .\artifacts\phase2-demo
 | 5. 評估與核准 | [`05-evaluation-approved.png`](screenshots/05-evaluation-approved.png) | Evaluate workspace 顯示 Macro F1、thresholds，以及 Candidate → Validated → Approved decision history。 |
 | 6. Detection | [`06-detection-controls.png`](screenshots/06-detection-controls.png) | Approved Evaluation、Detection Profile、Detection Run 與 source-pixel map context 已接上。 |
 | 7. Heatmap | [`06-heatmap.png`](screenshots/06-heatmap.png) | 輸出為原圖尺寸 512×384 的 class confidence map，含 grid 與 wafer-area overlay。 |
+| 8. 標註比對 | [`demo-summary.json`](screenshots/demo-summary.json) | 把 Detection Proposals 映射回 participating Annotation Grid，計算 per-class precision/recall/F1 與 exact-cell match。 |
 
 完整的 machine-readable 結果在 [`demo-summary.json`](screenshots/demo-summary.json)。
 最近一次本機執行的摘要包含：ResNet18 / CPU / 1 epoch、Evaluation Macro F1
 `1.0` 且 target satisfied、Detection map shape `[384, 512, 2]`。
+標註比對則是 exact cell match `16/88`、macro F1 `0.0274`；兩類 recall 都是
+`1.0`，但每類都有 71 個 false positive，precision 約 `0.0139`。
 
 ## 目前 MVP 的解讀邊界
 
@@ -50,8 +53,12 @@ python docs/demo/run_phase2_demo.py --output .\artifacts\phase2-demo
   用真實標註 patch 完成模型品質驗證。
 - Evaluation worker 使用 demo 的受控 `y_true` / `y_score`，所以 Macro F1
   `1.0` 只代表流程與 approval gate 通過，不是泛化能力報告。
+- `annotation_validation` 是實際把 Proposal rectangle 與 participating
+  Annotation Grid 做交集後的比對；這次低 precision 表示目前 Detection 結果
+  尚未符合兩個人工標註的範圍。
 - Detection/CAM 是目前 MVP 的 approximate weak localization。Heatmap 是
-  native-coordinate confidence visualization，不是 segmentation mask。
+  native-coordinate confidence visualization，不是 segmentation mask；目前
+  不應把這個 synthetic demo 當成可部署模型品質。
 
 要用真實資料驗證，請在應用程式中建立或開啟 project，匯入真實 8/16-bit
 grayscale wafer，完成 Grid/Effective Area/Reviewed 與 Dataset Snapshot，然後

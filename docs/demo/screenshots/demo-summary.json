@@ -10,7 +10,7 @@
     "particle"
   ],
   "training": {
-    "run_id": "788ae6c5-8805-4f78-9750-ae4b35d98be1",
+    "run_id": "f7b17aaa-b0d1-40f4-af89-c17db58624b8",
     "status": "completed",
     "architecture": "resnet18",
     "epochs": 1,
@@ -28,7 +28,7 @@
     ]
   },
   "detection": {
-    "run_id": "99975041-8970-4bcb-8123-631dc9b129b2",
+    "run_id": "3151695a-2f5e-4128-94b1-1739ab6dc4e0",
     "status": "completed",
     "class_names": [
       "particle",
@@ -42,5 +42,35 @@
     "scratch_min": 0.0,
     "scratch_max": 1.0,
     "heatmap": "06-heatmap.png"
+  },
+  "annotation_validation": {
+    "evaluated_cells": 88,
+    "exact_cell_matches": 16,
+    "exact_match_rate": 0.18181818181818182,
+    "macro_f1": 0.0273972602739726,
+    "classes": [
+      {
+        "class_name": "scratch",
+        "true_positive": 1,
+        "false_positive": 71,
+        "false_negative": 0,
+        "support": 1,
+        "predicted_positive": 72,
+        "precision": 0.013888888888888888,
+        "recall": 1.0,
+        "f1": 0.0273972602739726
+      },
+      {
+        "class_name": "particle",
+        "true_positive": 1,
+        "false_positive": 71,
+        "false_negative": 0,
+        "support": 1,
+        "predicted_positive": 72,
+        "precision": 0.013888888888888888,
+        "recall": 1.0,
+        "f1": 0.0273972602739726
+      }
+    ]
   }
 }

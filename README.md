@@ -50,7 +50,8 @@ $env:QT_QPA_FONTDIR = "C:/Windows/Fonts"
 python docs/demo/run_phase2_demo.py
 ```
 
-完整步驟、每階段截圖與 synthetic validation 邊界請參考
+完整步驟、每階段截圖、標註與 Proposal 的正式比對數據，以及 synthetic
+validation 邊界請參考
 [Phase 2 端到端 Demo 教學](docs/demo/phase2-end-to-end-tutorial.md)。
 
 ## Capabilities
