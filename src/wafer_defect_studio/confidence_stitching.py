@@ -75,17 +75,34 @@ def stitch_window_scores(
     weights = np.zeros((source_height, source_width), dtype=np.float64)
     coverage = np.zeros((source_height, source_width), dtype=np.int32)
     for index, window in enumerate(resolved_windows):
-        for y in range(window.source_rect.y, window.source_rect.bottom):
-            for x in range(window.source_rect.x, window.source_rect.right):
-                weight = _pixel_weight(window, x, y, mode)
-                if is_local:
-                    local = window.source_to_window(x, y)
-                    sample = values[index, int(local.y), int(local.x), :]
-                else:
-                    sample = values[index, :]
-                totals[y, x, :] += sample * weight
-                weights[y, x] += weight
-                coverage[y, x] += 1
+        rect = window.source_rect
+        source_y = slice(rect.y, rect.bottom)
+        source_x = slice(rect.x, rect.right)
+        if mode == "uniform":
+            contribution_weights = 1.0
+        else:
+            x = np.arange(rect.x, rect.right, dtype=np.float64)
+            y = np.arange(rect.y, rect.bottom, dtype=np.float64)
+            half_width = max(rect.width / 2.0, 0.5)
+            half_height = max(rect.height / 2.0, 0.5)
+            x_distance = np.abs((x + 0.5) - window.center.x) / half_width
+            y_distance = np.abs((y + 0.5) - window.center.y) / half_height
+            distance = np.maximum(y_distance[:, None], x_distance[None, :])
+            contribution_weights = 1.0 - 0.5 * np.minimum(1.0, distance)
+        if is_local:
+            local_y = rect.y - window.read_rect.y
+            local_x = rect.x - window.read_rect.x
+            sample = values[
+                index,
+                local_y : local_y + rect.height,
+                local_x : local_x + rect.width,
+                :,
+            ]
+        else:
+            sample = values[index, :]
+        totals[source_y, source_x, :] += sample * np.asarray(contribution_weights)[..., None]
+        weights[source_y, source_x] += contribution_weights
+        coverage[source_y, source_x] += 1
 
     confidence = np.full_like(totals, np.nan)
     covered = coverage > 0
