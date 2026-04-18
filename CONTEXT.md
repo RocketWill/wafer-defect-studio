@@ -52,6 +52,14 @@ _Avoid_: Grid configuration, tile settings
 A model input region sampled across a Wafer Image during detection. Inference Windows may overlap and are independent of Annotation Grid boundaries.
 _Avoid_: Annotation grid, cell
 
+**Model Patch**:
+A source-coordinate model input sampled inside an Annotation Grid or across a Wafer Image. It is smaller than an Annotation Grid when Patch Classification is used and does not inherit a Defect Class by itself.
+_Avoid_: Annotation Grid, tile label, defect crop
+
+**Patch Bag**:
+The ordered Model Patches derived from one Annotation Grid and trained against that grid's multi-label truth. A positive Patch Bag asserts that at least one contained Model Patch supports each asserted Defect Class; it does not identify which patch.
+_Avoid_: Patch label, segmentation region, bounding box
+
 **Data Group**:
 A set of Wafer Images that share acquisition conditions such as product, magnification, camera, and lighting. A project may contain multiple Data Groups.
 _Avoid_: Dataset, batch, category
@@ -113,7 +121,7 @@ Evaluation of the complete detection process on Wafer Images, including overlapp
 _Avoid_: Grid evaluation, image accuracy
 
 **Defect Confidence Map**:
-A class-specific spatial map assembled from class activation within overlapping Inference Windows. It provides weakly supervised approximate localization, not a pixel-accurate defect boundary.
+A class-specific spatial map assembled from class activation or Model Patch confidence within overlapping Inference Windows. It provides weakly supervised approximate localization, not a pixel-accurate defect boundary.
 _Avoid_: Segmentation mask, defect outline, heatmap
 
 **Defect Proposal**:
