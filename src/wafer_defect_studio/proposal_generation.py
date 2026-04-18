@@ -126,12 +126,8 @@ def generate_proposals(
     result: list[DefectProposal] = []
     for class_index, (class_name, threshold) in enumerate(zip(names, threshold_values)):
         values = maps[:, :, class_index]
-        active = np.isfinite(values) & (values >= threshold)
-        closed = _close(active, radius)
-        components = _components(closed)
+        components = _retained_components(values, threshold, radius, area_limit)
         for component in components:
-            if len(component) < area_limit:
-                continue
             ys = np.fromiter((point[0] for point in component), dtype=np.intp)
             xs = np.fromiter((point[1] for point in component), dtype=np.intp)
             confidence = values[ys, xs]
@@ -171,7 +167,67 @@ def generate_proposals(
     return tuple(result)
 
 
+def generate_confidence_regions(
+    artifact: CamDetectionArtifact | np.ndarray,
+    settings: Mapping[str, Any] | Any | None = None,
+    *,
+    thresholds: Mapping[str, Real] | Sequence[Real] | Real | None = None,
+    map_generation: Mapping[str, Any] | None = None,
+    class_names: Sequence[str] | None = None,
+    closing_radius: int | None = None,
+    minimum_area: int | None = None,
+) -> dict[str, np.ndarray]:
+    """Return retained per-class source-coordinate confidence region masks."""
+
+    maps, names, _source_width, _source_height, _provenance = _map_inputs(
+        artifact, class_names
+    )
+    resolved_thresholds, resolved_generation = _settings(
+        settings,
+        thresholds=thresholds,
+        map_generation=map_generation,
+        class_count=len(names),
+    )
+    threshold_values = _threshold_values(resolved_thresholds, names)
+    radius = _closing_radius(
+        resolved_generation.get("closing_radius", 0)
+        if closing_radius is None
+        else closing_radius
+    )
+    area_limit = _minimum_area(
+        resolved_generation.get("minimum_area", 1)
+        if minimum_area is None
+        else minimum_area
+    )
+    result: dict[str, np.ndarray] = {}
+    for class_name, threshold in zip(names, threshold_values):
+        mask = np.zeros(maps.shape[:2], dtype=bool)
+        for component in _retained_components(
+            maps[:, :, len(result)], threshold, radius, area_limit
+        ):
+            ys = np.fromiter((point[0] for point in component), dtype=np.intp)
+            xs = np.fromiter((point[1] for point in component), dtype=np.intp)
+            mask[ys, xs] = True
+        result[class_name] = mask
+    return result
+
+
 generate_defect_proposals = generate_proposals
+
+
+def _retained_components(
+    values: np.ndarray,
+    threshold: float,
+    radius: int,
+    area_limit: int,
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    active = np.isfinite(values) & (values >= threshold)
+    closed = _close(active, radius) & np.isfinite(values)
+    return tuple(
+        component
+        for component in _components(closed)
+        if len(component) >= area_limit
+    )
 
 
 def _map_inputs(
@@ -386,4 +442,9 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-__all__ = ["DefectProposal", "generate_defect_proposals", "generate_proposals"]
+__all__ = [
+    "DefectProposal",
+    "generate_confidence_regions",
+    "generate_defect_proposals",
+    "generate_proposals",
+]

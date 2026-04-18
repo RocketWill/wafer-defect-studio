@@ -118,6 +118,7 @@ class TrainingRequest(_VersionedMessage):
     request_id: str
     config: TrainingConfig
     artifact_staging_path: str | Path
+    input_bundle_path: str | Path | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.request_id, "request_id")
@@ -126,6 +127,10 @@ class TrainingRequest(_VersionedMessage):
         if isinstance(self.artifact_staging_path, Path):
             object.__setattr__(self, "artifact_staging_path", str(self.artifact_staging_path))
         _require_non_empty_string(self.artifact_staging_path, "artifact_staging_path")
+        if isinstance(self.input_bundle_path, Path):
+            object.__setattr__(self, "input_bundle_path", str(self.input_bundle_path))
+        if self.input_bundle_path is not None:
+            _require_non_empty_string(self.input_bundle_path, "input_bundle_path")
 
     @property
     def run_id(self) -> str:
@@ -136,11 +141,14 @@ class TrainingRequest(_VersionedMessage):
     def to_worker_payload(self) -> dict[str, Any]:
         """Return the complete worker input without any writable project handle."""
 
-        return {
+        payload = {
             "request_id": self.request_id,
             "config": self.config.to_dict(),
             "artifact_staging_path": str(self.artifact_staging_path),
         }
+        if self.input_bundle_path is not None:
+            payload["input_bundle_path"] = str(self.input_bundle_path)
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,11 +298,17 @@ def decode_message(serialized: str) -> ProtocolMessage:
         if message_type == TrainingConfig.message_type:
             return TrainingConfig.from_dict(payload)
         if message_type == TrainingRequest.message_type:
-            _require_keys(payload, {"request_id", "config", "artifact_staging_path"}, "request")
+            request_keys = {"request_id", "config", "artifact_staging_path"}
+            if set(payload) not in (request_keys, request_keys | {"input_bundle_path"}):
+                raise TrainingProtocolError(
+                    f"request fields must be exactly {sorted(request_keys)!r} "
+                    "or include input_bundle_path"
+                )
             return TrainingRequest(
                 request_id=payload["request_id"],
                 config=TrainingConfig.from_dict(payload["config"]),
                 artifact_staging_path=payload["artifact_staging_path"],
+                input_bundle_path=payload.get("input_bundle_path"),
             )
         if message_type == ProgressMessage.message_type:
             _require_keys(

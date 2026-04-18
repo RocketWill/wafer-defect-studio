@@ -193,6 +193,65 @@ def generate_cam_artifact(
 generate_approximate_cam_artifact = generate_cam_artifact
 
 
+def generate_all_convolutional_artifact(
+    windows: Sequence[Window],
+    local_probabilities: Any,
+    *,
+    class_names: Sequence[str] | None = None,
+    source_width: int | None = None,
+    source_height: int | None = None,
+    window_settings: Mapping[str, Any] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+    model_id: str | None = None,
+    profile_id: str | None = None,
+    evaluation_id: str | None = None,
+) -> CamDetectionArtifact:
+    """Stitch trained all-convolutional sigmoid maps without renormalizing them."""
+
+    resolved_windows = tuple(windows)
+    if not resolved_windows or any(not isinstance(window, Window) for window in resolved_windows):
+        raise ValueError("windows must contain at least one Window value")
+    width = resolved_windows[0].source_width if source_width is None else source_width
+    height = resolved_windows[0].source_height if source_height is None else source_height
+    _positive_integer("source_width", width)
+    _positive_integer("source_height", height)
+    values = _activation_array(local_probabilities)
+    if values.ndim == 3:
+        values = values[None, ...]
+    if values.ndim != 4 or values.shape[0] != len(resolved_windows):
+        raise ValueError("local_probabilities must have shape (windows, height, width, classes)")
+    window_height, window_width = resolved_windows[0].height, resolved_windows[0].width
+    if values.shape[1:3] != (window_height, window_width):
+        raise ValueError("local_probabilities spatial dimensions must match the model window")
+    if any((window.height, window.width) != (window_height, window_width) for window in resolved_windows):
+        raise ValueError("all windows must have equal model dimensions")
+    if not np.all(np.isfinite(values)) or not np.all((values >= 0.0) & (values <= 1.0)):
+        raise ValueError("local_probabilities must contain finite sigmoid values from 0 to 1")
+    names = _class_names(class_names, int(values.shape[-1]))
+    stitched = stitch_window_scores(
+        resolved_windows,
+        values,
+        source_width=width,
+        source_height=height,
+        class_count=len(names),
+        center_weight=str((window_settings or {}).get("center_weighting", "linear")),
+    )
+    metadata = _provenance(provenance, model_id, profile_id, evaluation_id)
+    metadata["map_method"] = "all_convolutional_sigmoid"
+    settings = _window_settings(window_settings, resolved_windows)
+    settings["map_method"] = "all_convolutional_sigmoid"
+    return CamDetectionArtifact(
+        maps=stitched.confidence.copy(),
+        coverage=stitched.coverage.copy(),
+        class_names=names,
+        source_width=int(width),
+        source_height=int(height),
+        source_transform=_source_transform(resolved_windows),
+        window_settings=settings,
+        provenance=metadata,
+    )
+
+
 def _activation_array(value: Any) -> np.ndarray:
     if hasattr(value, "detach"):
         value = value.detach().cpu().numpy()
@@ -294,5 +353,6 @@ def _positive_integer(name: str, value: Any) -> None:
 __all__ = [
     "CamDetectionArtifact",
     "generate_approximate_cam_artifact",
+    "generate_all_convolutional_artifact",
     "generate_cam_artifact",
 ]

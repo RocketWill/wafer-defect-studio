@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import torch
+
 from .project import (
     _DATASET_SPLIT_SCHEMA_VERSION,
     _TRAINING_RUN_SCHEMA_VERSION,
@@ -46,6 +48,7 @@ REQUIRED_ENVIRONMENT_KEYS = (
 )
 _OOM_ERROR_CODES = {"out_of_memory", "oom"}
 _CHECKPOINT_NAME = "model.pt"
+_CHECKPOINT_FORMAT = "wafer_defect_studio.resnet18.v1"
 _IMMUTABLE_COLUMNS = (
     "run_id",
     "created_at",
@@ -460,7 +463,10 @@ def publish_staged_artifacts(
     _validate_run_id(run_id)
     info = open_project(project_path)
     staging = Path(staging_path).expanduser().resolve()
-    validate_staged_artifacts(staging)
+    validated = validate_staged_artifacts(staging)
+    checkpoint = next((path for path in validated if path.name == _CHECKPOINT_NAME), None)
+    if checkpoint is not None:
+        validate_project_checkpoint(checkpoint)
     destination = (info.path / "runs" / run_id).resolve()
     if destination.exists():
         raise TrainingRunError(f"published artifacts already exist: {destination}")
@@ -470,6 +476,91 @@ def publish_staged_artifacts(
     except OSError as error:
         raise TrainingRunError(f"cannot atomically publish staged artifacts: {destination}") from error
     return destination
+
+
+def validate_project_checkpoint(
+    checkpoint_path: str | Path,
+    *,
+    expected_class_codes: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Validate the immutable metadata required by a project checkpoint."""
+
+    path = Path(checkpoint_path).expanduser().resolve()
+    if not path.is_file():
+        raise TrainingRunError(f"missing project checkpoint: {path}")
+    try:
+        value = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as error:
+        raise TrainingRunError(f"unable to load project checkpoint: {path}") from error
+    if not isinstance(value, Mapping):
+        raise TrainingRunError("project checkpoint must be a mapping")
+    required = {
+        "checkpoint_format",
+        "architecture",
+        "class_count",
+        "class_codes",
+        "normalization_bounds",
+        "input_size",
+        "state_dict",
+    }
+    missing = required - set(value)
+    if missing:
+        raise TrainingRunError(
+            f"project checkpoint metadata is incomplete: {', '.join(sorted(missing))}"
+        )
+    if value["checkpoint_format"] != _CHECKPOINT_FORMAT:
+        raise TrainingRunError("unsupported project checkpoint format")
+    if value["architecture"] != "resnet18":
+        raise TrainingRunError("project checkpoint architecture must be resnet18")
+    class_codes = value["class_codes"]
+    if (
+        not isinstance(class_codes, (list, tuple))
+        or not class_codes
+        or any(not isinstance(code, str) or not code for code in class_codes)
+        or len(set(class_codes)) != len(class_codes)
+    ):
+        raise TrainingRunError("project checkpoint class_codes must be ordered unique strings")
+    class_count = value["class_count"]
+    if isinstance(class_count, bool) or not isinstance(class_count, int) or class_count != len(class_codes):
+        raise TrainingRunError("project checkpoint class_count does not match class_codes")
+    if expected_class_codes is not None and tuple(class_codes) != tuple(expected_class_codes):
+        raise TrainingRunError("project checkpoint class order does not match the selected snapshot")
+    bounds = value["normalization_bounds"]
+    if not isinstance(bounds, (list, tuple)) or not bounds:
+        raise TrainingRunError("project checkpoint normalization_bounds are incomplete")
+    for item in bounds:
+        if not isinstance(item, Mapping):
+            raise TrainingRunError("project checkpoint normalization bounds are invalid")
+        if set(item) != {
+            "dtype",
+            "source_min",
+            "source_max",
+            "low",
+            "high",
+            "low_percentile",
+            "high_percentile",
+        }:
+            raise TrainingRunError("project checkpoint normalization bounds are incomplete")
+    input_size = value["input_size"]
+    if (
+        not isinstance(input_size, Mapping)
+        or set(input_size) != {"width", "height"}
+        or any(
+            isinstance(input_size[name], bool)
+            or not isinstance(input_size[name], int)
+            or input_size[name] < 1
+            for name in ("width", "height")
+        )
+    ):
+        raise TrainingRunError("project checkpoint input_size is invalid")
+    state_dict = value["state_dict"]
+    if (
+        not isinstance(state_dict, Mapping)
+        or not state_dict
+        or any(not isinstance(name, str) or not isinstance(tensor, torch.Tensor) for name, tensor in state_dict.items())
+    ):
+        raise TrainingRunError("project checkpoint state_dict is invalid")
+    return dict(value)
 
 
 # Short aliases keep the project-service seam discoverable without exposing a
@@ -709,6 +800,7 @@ __all__ = [
     "update_run_terminal",
     "update_training_run_terminal",
     "validate_staged_artifacts",
+    "validate_project_checkpoint",
     "resume_run",
     "resume_training_run",
 ]

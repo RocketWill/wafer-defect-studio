@@ -7,8 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from torchvision.models import ResNet18_Weights, resnet18
+
+from .training_run import TrainingRunError, validate_project_checkpoint
 
 
 class ModelRegistryError(ValueError):
@@ -154,6 +157,89 @@ def create_model(
     )
 
 
+def load_project_checkpoint(
+    checkpoint_path: str | Path,
+    *,
+    device: str | torch.device | None = "cpu",
+    expected_class_codes: tuple[str, ...] | None = None,
+    expected_input_size: tuple[int, int] | None = None,
+) -> tuple[ResNet18Classifier, dict[str, Any]]:
+    """Load one validated project-produced ResNet18 checkpoint."""
+
+    try:
+        checkpoint = validate_project_checkpoint(
+            checkpoint_path,
+            expected_class_codes=expected_class_codes,
+        )
+    except TrainingRunError as error:
+        raise ModelRegistryError(str(error)) from error
+    input_size = checkpoint["input_size"]
+    if expected_input_size is not None and (
+        input_size["width"], input_size["height"]
+    ) != tuple(expected_input_size):
+        raise ModelRegistryError("project checkpoint input rectangle does not match the request")
+    model = create_resnet18(
+        checkpoint["class_count"],
+        weights=WeightsPolicy.NONE,
+        device=device,
+    )
+    try:
+        model.load_state_dict(checkpoint["state_dict"], strict=True)
+    except (RuntimeError, TypeError, ValueError) as error:
+        raise ModelRegistryError("project checkpoint state_dict does not match ResNet18") from error
+    model.eval()
+    return model, checkpoint
+
+
+def resnet18_local_probabilities(
+    model: ResNet18Classifier,
+    inputs: Tensor,
+) -> Tensor:
+    """Project ResNet18 layer4 features to per-pixel sigmoid class maps."""
+
+    if not isinstance(model, ResNet18Classifier):
+        raise ModelRegistryError("model must be a ResNet18Classifier")
+    inputs = duplicate_grayscale_channels(inputs)
+    backbone = model.backbone
+    features = backbone.maxpool(backbone.relu(backbone.bn1(backbone.conv1(inputs))))
+    features = backbone.layer1(features)
+    features = backbone.layer2(features)
+    features = backbone.layer3(features)
+    features = backbone.layer4(features)
+    return _project_layer4_features(
+        features,
+        backbone.fc.weight,
+        backbone.fc.bias,
+        (inputs.shape[-2], inputs.shape[-1]),
+    )
+
+
+def _project_layer4_features(
+    features: Tensor,
+    classifier_weight: Tensor,
+    classifier_bias: Tensor,
+    output_size: tuple[int, int],
+) -> Tensor:
+    if not isinstance(features, Tensor) or features.ndim != 4:
+        raise ModelRegistryError("layer4 features must have shape (N, F, H, W)")
+    if classifier_weight.ndim != 2 or classifier_weight.shape[1] != features.shape[1]:
+        raise ModelRegistryError("classifier weight feature axis must match layer4 features")
+    if classifier_bias.ndim != 1 or classifier_bias.shape[0] != classifier_weight.shape[0]:
+        raise ModelRegistryError("classifier bias must match classifier weight classes")
+    if (
+        len(output_size) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in output_size)
+    ):
+        raise ModelRegistryError("output_size must be a positive (height, width) pair")
+    logits = F.conv2d(
+        features,
+        classifier_weight[:, :, None, None],
+        classifier_bias,
+    )
+    logits = F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
+    return torch.sigmoid(logits).permute(0, 2, 3, 1).contiguous()
+
+
 def _coerce_weights_policy(value: Any) -> WeightsPolicy:
     if value is None:
         return WeightsPolicy.NONE
@@ -181,5 +267,7 @@ __all__ = [
     "create_model",
     "create_resnet18",
     "duplicate_grayscale_channels",
+    "load_project_checkpoint",
+    "resnet18_local_probabilities",
     "resolve_device",
 ]

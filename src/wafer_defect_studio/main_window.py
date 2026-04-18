@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import queue
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -69,6 +71,13 @@ from .dataset_snapshot import load_dataset_snapshot
 from .evaluation_controls import DecisionService, EvaluationControls
 from .evaluation_inputs import EvaluationInputControls, EvaluationInputInventory, load_evaluation_input_inventory
 from .evaluation_run import load_evaluation, load_evaluation_decisions, record_evaluation_decision
+from .evaluation_worker import (
+    EvaluationTerminal,
+    build_checkpoint_evaluation_request,
+    create_evaluation_from_staged,
+    decode_message as decode_evaluation_message,
+    start_evaluation_worker,
+)
 from .detection_controls import (
     DetectionControls,
     DetectionLauncher,
@@ -90,7 +99,7 @@ from .detection_run import (
 )
 from .detection_worker import DetectionRequest, DetectionTerminal, start_detection_worker
 from .proposal_generation_controls import ProposalGenerationControls
-from .proposal_generation import generate_proposals
+from .proposal_generation import generate_confidence_regions, generate_proposals
 from .proposal_queue import build_review_queue
 from .proposal_review import load_proposal_revisions, record_review
 from .proposal_store import load_defect_proposals, save_defect_proposal
@@ -110,8 +119,15 @@ from .ui_theme import ThemeMode, apply_theme
 from .training_controls import CloneCallback, TrainingControls, TrainingLauncher, TrainingRequestSource
 from .training_configuration_controls import TrainingConfigurationControls
 from .training_inputs import TrainingInputControls, TrainingInputInventory, load_training_input_inventory
+from .training_input_bundle import create_training_input_bundle
 from .training_protocol import TerminalMessage, TrainingRequest
-from .training_run import RunConfig, create_training_run, update_training_run_terminal
+from .training_run import (
+    RunConfig,
+    create_training_run,
+    load_training_run,
+    update_training_run_terminal,
+    validate_project_checkpoint,
+)
 from .training_worker import start_training_worker
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
@@ -655,8 +671,16 @@ class MainWindow(QMainWindow):
         self._evaluation_controls = EvaluationControls()
         self._evaluation_input_controls = EvaluationInputControls()
         self._evaluation_context_restoring = False
+        self._evaluation_handle = None
+        self._evaluation_request = None
+        self._evaluation_timer = QTimer(self)
+        self._evaluation_timer.setInterval(50)
+        self._evaluation_timer.timeout.connect(self._poll_project_evaluation)
         self._evaluation_input_controls.combo.currentIndexChanged.connect(
             self._on_project_evaluation_changed
+        )
+        self._evaluation_input_controls.start_button.clicked.connect(
+            self._start_project_evaluation
         )
         evaluation_workspace = QWidget(self)
         evaluation_layout = QVBoxLayout(evaluation_workspace)
@@ -685,12 +709,24 @@ class MainWindow(QMainWindow):
         self._detection_controls.class_selector.currentIndexChanged.connect(
             self._on_detection_context_changed
         )
+        self._detection_controls.class_selector.currentIndexChanged.connect(
+            self._refresh_detection_overlay
+        )
+        self._detection_controls.region_mode_combo.currentIndexChanged.connect(
+            self._refresh_detection_overlay
+        )
+        self._detection_controls.opacity_slider.valueChanged.connect(
+            self._refresh_detection_overlay
+        )
         for widget in (
             self._detection_controls.image_layer_checkbox,
             self._detection_controls.grid_layer_checkbox,
             self._detection_controls.map_layer_checkbox,
         ):
             widget.toggled.connect(self._on_detection_context_changed)
+        self._detection_controls.map_layer_checkbox.toggled.connect(
+            self._refresh_detection_overlay
+        )
         detection_workspace = QWidget(self)
         detection_layout = QVBoxLayout(detection_workspace)
         detection_layout.addWidget(self._detection_profile_controls)
@@ -1660,7 +1696,28 @@ class MainWindow(QMainWindow):
             update_training_run_terminal(
                 project_path, run.run_id, "running", message="Training started."
             )
-            return TrainingRequest(run.run_id, request.config, run.staging_path)
+            bundle_path = run.staging_path / "training_input_bundle.json"
+            try:
+                create_training_input_bundle(
+                    project_path,
+                    request.config.snapshot_id,
+                    request.config.split_id,
+                    bundle_path,
+                )
+            except Exception as error:
+                update_training_run_terminal(
+                    project_path,
+                    run.run_id,
+                    "failed",
+                    message=f"Training input bundle failed: {error}",
+                )
+                raise
+            return TrainingRequest(
+                run.run_id,
+                request.config,
+                run.staging_path,
+                bundle_path,
+            )
 
         worker_launcher = launcher or start_training_worker
 
@@ -1694,6 +1751,101 @@ class MainWindow(QMainWindow):
         self._training_dock.setEnabled(True)
         self._training_controls.start_button.setEnabled(self._training_context_ready)
         self._training_dock.setVisible(self._current_workspace == "Train")
+
+    def _start_project_evaluation(self) -> None:
+        project_path = self._active_project_path
+        run_id = self._evaluation_input_controls.training_run_combo.currentData()
+        if project_path is None or not run_id:
+            self._evaluation_input_controls.status_label.setText(
+                "Evaluation requires an active completed Training Run."
+            )
+            return
+        request_id = str(uuid4())
+        staging_path = project_path / "runs" / ".staging" / f"evaluation-{request_id}"
+        try:
+            request = build_checkpoint_evaluation_request(
+                project_path,
+                str(run_id),
+                staging_path,
+                request_id=request_id,
+            )
+            handle = start_evaluation_worker(request)
+        except Exception as error:
+            self._evaluation_input_controls.status_label.setText(
+                f"Evaluation failed to start: {error}"
+            )
+            return
+        self._evaluation_request = request
+        self._evaluation_handle = handle
+        self._evaluation_input_controls.start_button.setEnabled(False)
+        self._evaluation_input_controls.status_label.setText(
+            f"Evaluation running for Training Run {request.run_id}…"
+        )
+        self._evaluation_timer.start()
+
+    def _poll_project_evaluation(self) -> None:
+        handle = self._evaluation_handle
+        request = self._evaluation_request
+        if handle is None or request is None:
+            self._evaluation_timer.stop()
+            return
+        output = getattr(handle, "queue", None)
+        if output is None:
+            self._finish_project_evaluation("failed", "worker has no output queue")
+            return
+        while True:
+            try:
+                raw = output.get_nowait()
+            except (queue.Empty, OSError, EOFError):
+                break
+            try:
+                message = decode_evaluation_message(raw) if isinstance(raw, str) else raw
+            except Exception as error:
+                self._finish_project_evaluation("failed", f"invalid worker message: {error}")
+                return
+            if isinstance(message, EvaluationTerminal):
+                if message.status == "completed":
+                    try:
+                        evaluation = create_evaluation_from_staged(
+                            self._active_project_path,
+                            request.staging_path,
+                            training_run_id=request.run_id,
+                        )
+                    except Exception as error:
+                        self._finish_project_evaluation(
+                            "failed", f"Evaluation publication failed: {error}"
+                        )
+                    else:
+                        self._finish_project_evaluation(
+                            "completed", f"Evaluation {evaluation.evaluation_id} created."
+                        )
+                        self._refresh_project_evaluation_inventory(evaluation.evaluation_id)
+                else:
+                    self._finish_project_evaluation(message.status, message.message)
+                return
+        is_alive = getattr(handle, "is_alive", None)
+        if callable(is_alive) and not is_alive():
+            self._finish_project_evaluation("failed", "worker exited without a terminal status")
+
+    def _finish_project_evaluation(self, status: str, message: str) -> None:
+        self._evaluation_timer.stop()
+        self._evaluation_handle = None
+        self._evaluation_request = None
+        self._evaluation_input_controls.start_button.setEnabled(True)
+        self._evaluation_input_controls.status_label.setText(
+            f"Evaluation {status}: {message}" if message else f"Evaluation {status}."
+        )
+
+    def _refresh_project_evaluation_inventory(self, selected_id: str | None = None) -> None:
+        project_path = self._active_project_path
+        if project_path is None:
+            return
+        inventory = load_evaluation_input_inventory(project_path)
+        self._evaluation_input_controls.set_inventory(inventory)
+        if selected_id:
+            index = self._evaluation_input_controls.combo.findData(selected_id)
+            if index >= 0:
+                self._evaluation_input_controls.combo.setCurrentIndex(index)
 
     def _on_project_evaluation_changed(self, _index: int) -> None:
         evaluation_id = self._evaluation_input_controls.combo.currentData()
@@ -2010,9 +2162,36 @@ class MainWindow(QMainWindow):
             )
             return
         self._detection_controls.set_artifact(artifact)
+        self._refresh_detection_overlay()
         self._configure_project_proposal_generation(str(run_id))
         if self._current_workspace == "Review":
             self._refresh_project_proposal_review()
+
+    def _refresh_detection_overlay(self, *_args) -> None:
+        artifact = self._detection_controls.artifact
+        if artifact is None or self._loaded_wafer_image is None:
+            self._image_view.clear_confidence_overlay()
+            return
+        profile_id = self._detection_input_controls.profile_combo.currentData()
+        selected = self._detection_controls.selected_class()
+        if not profile_id or not selected:
+            self._image_view.clear_confidence_overlay()
+            return
+        try:
+            profile = load_detection_profile(self._active_project_path, str(profile_id))
+            regions = generate_confidence_regions(artifact, profile)
+            confidence = artifact.class_map(selected)
+            self._image_view.set_confidence_overlay(
+                confidence if self._detection_controls.map_layer_checkbox.isChecked() else None,
+                regions.get(selected),
+                mode=self._detection_controls.region_mode_combo.currentText(),
+                opacity=self._detection_controls.opacity_slider.value() / 100.0,
+            )
+        except Exception as error:
+            self._image_view.clear_confidence_overlay()
+            self._detection_controls.status_label.setText(
+                f"Confidence overlay unavailable: {error}"
+            )
 
     def _refresh_project_proposal_review(self) -> None:
         project_path = self._active_project_path
@@ -2294,14 +2473,26 @@ class MainWindow(QMainWindow):
         if not rows:
             raise ValueError("Review at least one Proposal before export")
 
+        saved_class = str(
+            self._settings.value(
+                self._result_export_context_key(project_info, "selectedClass"),
+                "",
+            )
+            or ""
+        ).strip()
         selected_class = rows[0].class_name
+        if saved_class and any(row.class_name == saved_class for row in rows):
+            selected_class = saved_class
         confidence_map = None
+        region_mask = None
         artifact = self._detection_controls.artifact
         if artifact is not None:
             try:
                 confidence_map = artifact.class_map(selected_class)
             except KeyError:
                 confidence_map = None
+            if self._detection_controls.region_mode_combo.currentText() in {"Regions", "Both"}:
+                region_mask = generate_confidence_regions(artifact, profile).get(selected_class)
 
         grid_rects = ()
         placement = load_image_grid_placement(project_path, image_asset_id)
@@ -2328,22 +2519,15 @@ class MainWindow(QMainWindow):
                     )
                 )
 
-        saved_class = str(
-            self._settings.value(
-                self._result_export_context_key(project_info, "selectedClass"),
-                "",
-            )
-            or ""
-        ).strip()
         self.configure_result_export(
             source_image,
             rows,
             selected_class,
             confidence_map=confidence_map,
+            region_mask=region_mask,
+            region_opacity=self._detection_controls.opacity_slider.value() / 100.0,
             grid_rects=grid_rects,
         )
-        if saved_class and any(row.class_name == saved_class for row in rows):
-            self._result_export_controls.selected_class_edit.setText(saved_class)
         return rows
 
     def _configure_project_proposal_generation(self, run_id: str) -> None:
@@ -2414,9 +2598,27 @@ class MainWindow(QMainWindow):
             if not profile_id:
                 raise ValueError("A Detection Profile is required")
             profile = load_detection_profile(project_path, str(profile_id))
+            training = load_training_run(project_path, profile.training_run_id)
+            if training.status != "completed" or training.artifact_path is None:
+                raise ValueError(
+                    f"Approved Training Run {training.run_id} has no completed checkpoint"
+                )
+            checkpoint_path = training.artifact_path / "model.pt"
+            checkpoint = validate_project_checkpoint(checkpoint_path)
+            checkpoint_class_codes = tuple(checkpoint["class_codes"])
+            if set(checkpoint_class_codes) != set(profile.thresholds):
+                raise ValueError("project checkpoint classes do not match the Detection Profile")
+            if (
+                checkpoint["input_size"]["width"],
+                checkpoint["input_size"]["height"],
+            ) != profile.window_size:
+                raise ValueError(
+                    "Detection window size does not match the checkpoint input rectangle"
+                )
+            checkpoint_sha256 = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
             run_id = str(uuid4())
             staging_path = project_path / "runs" / ".staging" / f"detection-{run_id}"
-            class_names = tuple(profile.thresholds) or ("defect",)
+            class_names = checkpoint_class_codes or ("defect",)
             source_fingerprints = {
                 self._current_image_asset.image_asset_id: self._current_image_asset.fingerprint
             }
@@ -2435,7 +2637,13 @@ class MainWindow(QMainWindow):
                 stride=profile.stride,
                 reflect_padding=profile.reflect_padding,
                 center_weighting=profile.center_weighting,
-                provenance={"coordinate_system": "source-image-pixels"},
+                checkpoint_path=checkpoint_path,
+                batch_size=8,
+                model_id=f"training-run:{training.run_id}",
+                provenance={
+                    "coordinate_system": "source-image-pixels",
+                    "checkpoint_sha256": checkpoint_sha256,
+                },
             )
             pending[run_id] = (request, profile, source_fingerprints)
             return request
@@ -2524,6 +2732,7 @@ class MainWindow(QMainWindow):
         """Refresh the displayed Detection map without touching project state."""
 
         self._detection_controls.set_artifact(artifact)
+        self._refresh_detection_overlay()
         self._detection_dock.setEnabled(artifact is not None)
         self._detection_dock.setVisible(artifact is not None)
 
@@ -2552,6 +2761,8 @@ class MainWindow(QMainWindow):
         selected_class: str,
         *,
         confidence_map=None,
+        region_mask=None,
+        region_opacity=0.7,
         grid_rects=(),
         export_callback: ExportCallback | None = None,
     ) -> None:
@@ -2562,6 +2773,8 @@ class MainWindow(QMainWindow):
             rows,
             selected_class,
             confidence_map=confidence_map,
+            region_mask=region_mask,
+            region_opacity=region_opacity,
             grid_rects=grid_rects,
             export_callback=export_callback,
         )
@@ -2946,6 +3159,7 @@ class MainWindow(QMainWindow):
         self._image_view._set_loaded_image(loaded, image)
         if asset is not None:
             self._set_current_image_asset(asset)
+        self._refresh_detection_overlay()
         QTimer.singleShot(0, self._image_view._fit_image)
         ready_status = "Ready - Lossy JPEG Source" if self._latest_lossy_source else "Ready"
         self.statusBar().showMessage(ready_status)

@@ -12,6 +12,7 @@ import hashlib
 import json
 import multiprocessing as mp
 import time
+from uuid import uuid4
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from math import isfinite
@@ -22,6 +23,7 @@ import numpy as np
 
 from .evaluation_run import EvaluationRecord, EvaluationRunError, create_evaluation
 from .grid_evaluation import ClassMetrics, GridMetrics, compute_grid_metrics
+from .model_scoring import score_training_bundle
 from .thresholds import (
     DEFAULT_MAX_FPR_TARGET,
     DEFAULT_MIN_RECALL_TARGET,
@@ -323,6 +325,57 @@ def start_evaluation_worker(
     )
     process.start()
     return EvaluationWorkerHandle(process, output_queue, cancel_event, request.request_id)
+
+
+def build_checkpoint_evaluation_request(
+    project_path: str | Path,
+    training_run_id: str,
+    staging_path: str | Path,
+    *,
+    request_id: str | None = None,
+    split: str = "test",
+    thresholds: float | Sequence[float] = 0.5,
+    policies: Any = None,
+    criteria: Mapping[str, Any] | None = None,
+    notes: str = "",
+    device: str = "cpu",
+) -> EvaluationRequest:
+    """Build an Evaluation request from a completed run's checkpoint bundle."""
+
+    try:
+        run = load_training_run(project_path, training_run_id)
+    except TrainingRunError as error:
+        raise EvaluationWorkerError(str(error)) from error
+    if run.status != "completed":
+        raise EvaluationWorkerError("checkpoint Evaluation requires a completed Training Run")
+    if run.artifact_path is None or not run.artifact_path.is_dir():
+        raise EvaluationWorkerError("completed Training Run has no published artifact directory")
+    bundle_path = run.artifact_path / "training_input_bundle.json"
+    checkpoint_path = run.artifact_path / "model.pt"
+    try:
+        scores = score_training_bundle(
+            bundle_path,
+            checkpoint_path,
+            split=split,
+            device=device,
+        )
+    except ValueError as error:
+        raise EvaluationWorkerError(f"unable to score Training Run {training_run_id}: {error}") from error
+    return EvaluationRequest(
+        request_id or str(uuid4()),
+        run.run_id,
+        run.snapshot_id,
+        run.split_id,
+        scores.y_true.tolist(),
+        scores.y_score.tolist(),
+        staging_path,
+        class_names=scores.class_codes,
+        thresholds=thresholds,
+        policies=policies,
+        criteria={} if criteria is None else criteria,
+        environment=run.environment,
+        notes=notes,
+    )
 
 
 def run_evaluation_worker(
@@ -791,6 +844,7 @@ __all__ = [
     "EvaluationTerminal",
     "EvaluationWorkerError",
     "EvaluationWorkerHandle",
+    "build_checkpoint_evaluation_request",
     "create_evaluation_from_stage",
     "create_evaluation_from_staged",
     "decode_message",

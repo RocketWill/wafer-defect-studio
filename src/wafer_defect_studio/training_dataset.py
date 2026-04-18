@@ -26,7 +26,7 @@ def extract_model_patch(
     *,
     top: int,
     left: int,
-    size: int,
+    size: int | tuple[int, int],
 ) -> torch.Tensor:
     """Return one normalized, reflect-padded grayscale patch as ``(3, H, W)``.
 
@@ -44,8 +44,18 @@ def extract_model_patch(
         raise TrainingDatasetError("top must be an integer")
     if not isinstance(left, int) or isinstance(left, bool):
         raise TrainingDatasetError("left must be an integer")
-    if not isinstance(size, int) or isinstance(size, bool) or size < 1:
-        raise TrainingDatasetError("size must be a positive integer")
+    if isinstance(size, int) and not isinstance(size, bool):
+        patch_width = patch_height = size
+    elif (
+        isinstance(size, tuple)
+        and len(size) == 2
+        and all(isinstance(value, int) and not isinstance(value, bool) for value in size)
+    ):
+        patch_width, patch_height = size
+    else:
+        raise TrainingDatasetError("size must be a positive integer or (width, height)")
+    if patch_width < 1 or patch_height < 1:
+        raise TrainingDatasetError("size values must be positive integers")
 
     _, source_min, source_max, _ = _NATIVE_RANGES[source_dtype]
     if bounds.dtype != source_dtype:
@@ -65,8 +75,8 @@ def extract_model_patch(
     ):
         raise TrainingDatasetError("Normalization bounds must be ordered native values")
 
-    row_indices = _reflect_indices(top, size, source_array.shape[0])
-    column_indices = _reflect_indices(left, size, source_array.shape[1])
+    row_indices = _reflect_indices(top, patch_height, source_array.shape[0])
+    column_indices = _reflect_indices(left, patch_width, source_array.shape[1])
     native_patch = source_array[np.ix_(row_indices, column_indices)]
     normalized = native_patch.astype(np.float64, copy=True)
     normalized -= float(bounds.low)

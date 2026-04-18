@@ -18,8 +18,17 @@ from typing import Any, ClassVar
 
 import numpy as np
 
-from .cam_detection import CamDetectionArtifact, generate_cam_artifact
+import torch
+
+from .cam_detection import (
+    CamDetectionArtifact,
+    generate_all_convolutional_artifact,
+    generate_cam_artifact,
+)
 from .detection_windows import Window, enumerate_inference_windows
+from .model_registry import load_project_checkpoint, resnet18_local_probabilities
+from .normalization import NormalizationBounds
+from .training_dataset import extract_model_patch
 
 
 PROTOCOL_VERSION = 1
@@ -57,6 +66,8 @@ class DetectionRequest:
     model_id: str = "synthetic-edge-v1"
     classifier_weights: Sequence[Sequence[float]] | Sequence[float] | None = None
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    checkpoint_path: str | Path | None = None
+    batch_size: int = 8
 
     def __post_init__(self) -> None:
         _require_text(self.request_id, "request_id")
@@ -94,6 +105,11 @@ class DetectionRequest:
         object.__setattr__(self, "device", _device_name(self.device))
         _require_text(self.model_id, "model_id")
         object.__setattr__(self, "provenance", _json_mapping(self.provenance, "provenance"))
+        if isinstance(self.checkpoint_path, Path):
+            object.__setattr__(self, "checkpoint_path", str(self.checkpoint_path))
+        if self.checkpoint_path is not None:
+            _require_text(self.checkpoint_path, "checkpoint_path")
+        _positive_int(self.batch_size, "batch_size")
         if self.classifier_weights is not None:
             try:
                 values = np.asarray(self.classifier_weights, dtype=np.float64)
@@ -106,7 +122,7 @@ class DetectionRequest:
     def to_payload(self) -> dict[str, Any]:
         """Return JSON-compatible values without a project or SQLite handle."""
 
-        return {
+        payload = {
             "request_id": self.request_id,
             "source": self.source.tolist(),
             "source_dtype": str(self.source.dtype),
@@ -126,6 +142,10 @@ class DetectionRequest:
             "classifier_weights": self.classifier_weights,
             "provenance": dict(self.provenance),
         }
+        if self.checkpoint_path is not None:
+            payload["checkpoint_path"] = str(self.checkpoint_path)
+            payload["batch_size"] = self.batch_size
+        return payload
 
     def to_json(self) -> str:
         return json.dumps(
@@ -156,13 +176,16 @@ class DetectionRequest:
             "classifier_weights",
             "provenance",
         }
-        if set(value) != expected:
+        optional = {"checkpoint_path", "batch_size"}
+        if set(value) not in (expected, expected | optional):
             raise DetectionProtocolError("detection request fields are invalid")
         try:
             source = np.asarray(value["source"], dtype=value["source_dtype"])
             values = dict(value)
             values["source"] = source
             values.pop("source_dtype")
+            values.setdefault("checkpoint_path", None)
+            values.setdefault("batch_size", 8)
             return cls(**values)
         except (TypeError, ValueError) as error:
             if isinstance(error, DetectionWorkerError):
@@ -363,30 +386,95 @@ def run_detection_worker(
             _emit_cancelled(output_queue, request_value)
             return
         device = _resolve_device(request_value.device)
-        patches = np.empty(
-            (len(windows), request_value.window_size[1], request_value.window_size[0]),
-            dtype=np.float32,
-        )
-        for index, window in enumerate(windows):
-            if _cancelled(cancel_event):
-                _cleanup_stage(staging)
-                _emit_cancelled(output_queue, request_value)
-                return
-            patches[index] = _window_patch(request_value.source, window)
-            _emit(
-                output_queue,
-                DetectionProgress(
-                    request_value.request_id,
-                    "detect",
-                    index + 1,
-                    total,
-                    f"Evaluated source window {index + 1}/{len(windows)} on {device}",
-                ),
+        checkpoint_model = None
+        checkpoint = None
+        bounds_by_dtype: dict[str, NormalizationBounds] = {}
+        if request_value.checkpoint_path is not None:
+            checkpoint_model, checkpoint = load_project_checkpoint(
+                request_value.checkpoint_path,
+                device=device,
+                expected_class_codes=tuple(request_value.class_names),
+                expected_input_size=(request_value.window_size[0], request_value.window_size[1]),
             )
-            if step_delay:
-                time.sleep(step_delay)
-
-        activations = _edge_activations(patches, device)
+            bounds_by_dtype = {
+                item["dtype"]: NormalizationBounds(**item)
+                for item in checkpoint["normalization_bounds"]
+            }
+            if str(request_value.source.dtype) not in bounds_by_dtype:
+                raise DetectionWorkerError(
+                    f"checkpoint has no normalization bounds for {request_value.source.dtype}"
+                )
+        if checkpoint_model is not None:
+            bounds = bounds_by_dtype[str(request_value.source.dtype)]
+            local_maps: list[np.ndarray] = []
+            for start in range(0, len(windows), request_value.batch_size):
+                if _cancelled(cancel_event):
+                    _cleanup_stage(staging)
+                    _emit_cancelled(output_queue, request_value)
+                    return
+                batch_windows = windows[start : start + request_value.batch_size]
+                patches = np.empty(
+                    (len(batch_windows), request_value.window_size[1], request_value.window_size[0]),
+                    dtype=request_value.source.dtype,
+                )
+                for offset, window in enumerate(batch_windows):
+                    patches[offset] = _window_patch(request_value.source, window)
+                    _emit(
+                        output_queue,
+                        DetectionProgress(
+                            request_value.request_id,
+                            "detect",
+                            start + offset + 1,
+                            total,
+                            f"Evaluated source window {start + offset + 1}/{len(windows)} on {device}",
+                        ),
+                    )
+                    if step_delay:
+                        time.sleep(step_delay)
+                normalized = torch.stack(
+                    [
+                        extract_model_patch(
+                            patches[index],
+                            bounds,
+                            top=0,
+                            left=0,
+                            size=(request_value.window_size[0], request_value.window_size[1]),
+                        )
+                        for index in range(len(batch_windows))
+                    ]
+                ).to(device)
+                with torch.no_grad():
+                    local_maps.append(
+                        resnet18_local_probabilities(checkpoint_model, normalized)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    )
+            map_values = np.concatenate(local_maps, axis=0)
+        else:
+            patches = np.empty(
+                (len(windows), request_value.window_size[1], request_value.window_size[0]),
+                dtype=np.float32,
+            )
+            for index, window in enumerate(windows):
+                if _cancelled(cancel_event):
+                    _cleanup_stage(staging)
+                    _emit_cancelled(output_queue, request_value)
+                    return
+                patches[index] = _window_patch(request_value.source, window)
+                _emit(
+                    output_queue,
+                    DetectionProgress(
+                        request_value.request_id,
+                        "detect",
+                        index + 1,
+                        total,
+                        f"Evaluated source window {index + 1}/{len(windows)} on {device}",
+                    ),
+                )
+                if step_delay:
+                    time.sleep(step_delay)
+            map_values = _edge_activations(patches, device)
         weights = _classifier_weights(request_value.classifier_weights, len(request_value.class_names))
         # The profile is the approved evaluation binding known to this
         # value-only worker.  A caller may provide the explicit evaluation
@@ -407,22 +495,36 @@ def run_detection_worker(
             "source_coordinate_system": "source-image pixels",
             "window_count": len(windows),
         }
-        artifact = generate_cam_artifact(
-            windows,
-            activations,
-            weights,
-            class_names=request_value.class_names,
-            window_settings={
-                "window_size": list(request_value.window_size),
-                "stride": list(request_value.stride),
-                "reflect_padding": request_value.reflect_padding,
-                "center_weighting": request_value.center_weighting,
-            },
-            provenance=provenance,
-            model_id=request_value.model_id,
-            profile_id=request_value.profile_id,
-            evaluation_id=evaluation_id,
-        )
+        window_settings = {
+            "window_size": list(request_value.window_size),
+            "stride": list(request_value.stride),
+            "reflect_padding": request_value.reflect_padding,
+            "center_weighting": request_value.center_weighting,
+        }
+        if checkpoint_model is not None:
+            provenance["checkpoint_path"] = str(Path(request_value.checkpoint_path).expanduser().resolve())
+            artifact = generate_all_convolutional_artifact(
+                windows,
+                map_values,
+                class_names=request_value.class_names,
+                window_settings=window_settings,
+                provenance=provenance,
+                model_id=request_value.model_id,
+                profile_id=request_value.profile_id,
+                evaluation_id=evaluation_id,
+            )
+        else:
+            artifact = generate_cam_artifact(
+                windows,
+                map_values,
+                weights,
+                class_names=request_value.class_names,
+                window_settings=window_settings,
+                provenance=provenance,
+                model_id=request_value.model_id,
+                profile_id=request_value.profile_id,
+                evaluation_id=evaluation_id,
+            )
         _emit(
             output_queue,
             DetectionProgress(request_value.request_id, "map", len(windows) + 1, total, "Stitched native-coordinate CAM maps"),
@@ -548,7 +650,7 @@ def _source_array(value: Any) -> np.ndarray:
 
 
 def _window_patch(source: np.ndarray, window: Window) -> np.ndarray:
-    patch = np.empty((window.height, window.width), dtype=np.float32)
+    patch = np.empty((window.height, window.width), dtype=source.dtype)
     for local_y in range(window.height):
         for local_x in range(window.width):
             point = window.window_to_source(local_x, local_y)
@@ -598,12 +700,13 @@ def _classifier_weights(value: Any, class_count: int) -> np.ndarray:
 
 def _write_staged_artifacts(staging: Path, artifact: CamDetectionArtifact, provenance: Mapping[str, Any]) -> None:
     staging.mkdir(parents=True, exist_ok=True)
+    stored_provenance = {**dict(provenance), **dict(artifact.provenance)}
     maps_path = staging / "maps.json"
     provenance_path = staging / "provenance.json"
     manifest_path = staging / "manifest.json"
     maps_path.write_text(artifact.to_json() + "\n", encoding="utf-8")
     provenance_path.write_text(
-        json.dumps(dict(provenance), sort_keys=True, separators=(",", ":")) + "\n",
+        json.dumps(stored_provenance, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
     entries = [{"path": name, "sha256": _sha256(staging / name)} for name in _STAGE_FILES]
@@ -611,7 +714,10 @@ def _write_staged_artifacts(staging: Path, artifact: CamDetectionArtifact, prove
         "format": _STAGE_FORMAT,
         "required_files": list(_STAGE_FILES),
         "files": entries,
-        "provenance": {"run_id": provenance.get("run_id"), "profile_id": provenance.get("profile_id")},
+        "provenance": {
+            "run_id": stored_provenance.get("run_id"),
+            "profile_id": stored_provenance.get("profile_id"),
+        },
     }
     temporary_manifest = staging / "manifest.json.tmp"
     temporary_manifest.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")

@@ -67,12 +67,18 @@ class DetectionControls(QWidget):
         self.map_layer_checkbox = QCheckBox("Defect Confidence Map", self)
         self.map_layer_checkbox.setObjectName("detectionMapLayerCheckBox")
         self.map_layer_checkbox.setChecked(True)
+        self.region_mode_combo = QComboBox(self)
+        self.region_mode_combo.setObjectName("detectionRegionModeComboBox")
+        self.region_mode_combo.addItems(("Heatmap", "Regions", "Both"))
+        self.region_mode_combo.setCurrentText("Both")
 
         layer_group = QGroupBox("Layers", self)
         layer_layout = QVBoxLayout(layer_group)
         layer_layout.addWidget(self.image_layer_checkbox)
         layer_layout.addWidget(self.grid_layer_checkbox)
         layer_layout.addWidget(self.map_layer_checkbox)
+        layer_layout.addWidget(QLabel("Confidence view", self))
+        layer_layout.addWidget(self.region_mode_combo)
 
         self.class_selector = QComboBox(self)
         self.class_selector.setObjectName("detectionClassSelector")
@@ -383,6 +389,7 @@ class DetectionControls(QWidget):
     def _set_controls_enabled(self, enabled: bool) -> None:
         for widget in (
             self.class_selector,
+            self.region_mode_combo,
             self.opacity_slider,
             self.x_spin,
             self.y_spin,

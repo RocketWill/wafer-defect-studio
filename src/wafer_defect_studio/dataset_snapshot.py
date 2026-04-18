@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .defect_class import DefectClass, load_defect_classes
+from .effective_area import confirmed_participating_grids, load_effective_wafer_area
+from .grid_geometry import annotation_grids
 from .normalization import NormalizationBounds
 from .project import (
     _DATASET_SNAPSHOTS_TABLE_SQL,
@@ -58,6 +60,18 @@ class AnnotationVersion:
 
 
 @dataclass(frozen=True)
+class SnapshotSample:
+    image_asset_id: str
+    row: int
+    column: int
+    x: int
+    y: int
+    width: int
+    height: int
+    class_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DatasetSnapshot:
     snapshot_id: str
     created_at: str
@@ -68,6 +82,7 @@ class DatasetSnapshot:
     annotation_versions: tuple[AnnotationVersion, ...]
     normalization_bounds: tuple[NormalizationBounds, ...]
     sampling_policy: SamplingPolicy
+    samples: tuple[SnapshotSample, ...] = ()
 
 
 def create_dataset_snapshot(
@@ -147,6 +162,106 @@ def create_dataset_snapshot(
             AnnotationVersion(image_id, _annotation_hash(connection, image_id))
             for image_id in eligible
         )
+        area_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'effective_wafer_areas'"
+        ).fetchone()
+        samples: tuple[SnapshotSample, ...] = ()
+        if area_table is not None:
+            geometry_rows = connection.execute(
+                "SELECT i.image_asset_id, i.width, i.height, p.cell_width, p.cell_height, "
+                "g.origin_x, g.origin_y "
+                "FROM image_assets i "
+                "JOIN image_grid_placements g USING (image_asset_id) "
+                "JOIN grid_profiles p ON p.grid_profile_id = g.grid_profile_id "
+                "AND p.version = g.grid_profile_version "
+                "WHERE i.image_asset_id IN ("
+                + ",".join("?" for _ in eligible)
+                + ") ORDER BY i.image_asset_id",
+                eligible,
+            ).fetchall()
+            if len(geometry_rows) != len(eligible):
+                raise DatasetSnapshotError("Training Scope has incomplete sample geometry")
+
+            frozen_samples: list[SnapshotSample] = []
+            for (
+                image_id,
+                image_width,
+                image_height,
+                cell_width,
+                cell_height,
+                origin_x,
+                origin_y,
+            ) in geometry_rows:
+                try:
+                    area = load_effective_wafer_area(info.path, image_id)
+                except ProjectError as error:
+                    raise DatasetSnapshotError(
+                        f"Invalid Effective Wafer Area for image: {image_id}"
+                    ) from error
+                if area is None:
+                    raise DatasetSnapshotError(
+                        f"Missing Effective Wafer Area for snapshot sample: {image_id}"
+                    )
+                try:
+                    participating = confirmed_participating_grids(
+                        annotation_grids(
+                            int(image_width),
+                            int(image_height),
+                            int(cell_width),
+                            int(cell_height),
+                            origin_x=int(origin_x),
+                            origin_y=int(origin_y),
+                        ),
+                        area,
+                    )
+                except (ProjectError, TypeError, ValueError) as error:
+                    raise DatasetSnapshotError(
+                        f"Invalid sample geometry for image: {image_id}"
+                    ) from error
+
+                annotation_rows = connection.execute(
+                    "SELECT row, column, class_codes_json FROM grid_annotations "
+                    "WHERE image_asset_id = ? ORDER BY row, column",
+                    (image_id,),
+                ).fetchall()
+                sample_annotations: dict[tuple[int, int], tuple[str, ...]] = {}
+                for row, column, serialized in annotation_rows:
+                    try:
+                        values = json.loads(serialized)
+                    except (TypeError, ValueError, json.JSONDecodeError) as error:
+                        raise DatasetSnapshotError(
+                            f"Invalid Grid Annotation metadata for image: {image_id}"
+                        ) from error
+                    if (
+                        not isinstance(values, list)
+                        or any(not isinstance(code, str) or not code for code in values)
+                        or len(set(values)) != len(values)
+                    ):
+                        raise DatasetSnapshotError(
+                            f"Invalid Grid Annotation metadata for image: {image_id}"
+                        )
+                    sample_annotations[(int(row), int(column))] = tuple(values)
+
+                for grid in participating:
+                    frozen_samples.append(
+                        SnapshotSample(
+                            image_id,
+                            grid.row,
+                            grid.column,
+                            grid.x,
+                            grid.y,
+                            grid.width,
+                            grid.height,
+                            tuple(
+                                code
+                                for code in scope.class_codes
+                                if code in sample_annotations.get(
+                                    (grid.row, grid.column), ()
+                                )
+                            ),
+                        )
+                    )
+            samples = tuple(frozen_samples)
         snapshot = DatasetSnapshot(
             str(uuid.uuid4()),
             datetime.now(timezone.utc).isoformat(),
@@ -157,6 +272,7 @@ def create_dataset_snapshot(
             annotations,
             normalization_bounds,
             SamplingPolicy(float(sampling_policy.normal_to_positive_ratio)),
+            samples,
         )
         _ensure_schema(connection, info.project_id, database)
         connection.execute(
@@ -252,6 +368,19 @@ def _decode(serialized: str) -> DatasetSnapshot:
             tuple(AnnotationVersion(**item) for item in value["annotation_versions"]),
             tuple(NormalizationBounds(**item) for item in value["normalization_bounds"]),
             SamplingPolicy(**value["sampling_policy"]),
+            tuple(
+                SnapshotSample(
+                    item["image_asset_id"],
+                    item["row"],
+                    item["column"],
+                    item["x"],
+                    item["y"],
+                    item["width"],
+                    item["height"],
+                    tuple(item["class_codes"]),
+                )
+                for item in value.get("samples", ())
+            ),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise DatasetSnapshotError("Invalid Dataset Snapshot metadata") from error

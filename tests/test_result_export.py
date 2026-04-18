@@ -141,6 +141,46 @@ class ResultExportTest(unittest.TestCase):
             self.assertNotEqual(rendered.pixelColor(3, 2), source.pixelColor(3, 2))
         app.processEvents()
 
+    def test_png_region_mask_uses_source_pixels_and_empty_mask_is_transparent(self):
+        app = QApplication.instance() or QApplication([])
+        source = QImage(64, 96, QImage.Format_Grayscale8)
+        source.fill(80)
+        region_mask = np.zeros((96, 64), dtype=bool)
+        region_mask[60, 30] = True
+        region_mask[61, 30] = True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "regions.png"
+            export_proposals_png(
+                destination,
+                source,
+                self._reviewed_rows(),
+                selected_class="刮痕",
+                region_mask=region_mask,
+                region_opacity=0.7,
+            )
+            rendered = QImage(str(destination))
+            self.assertEqual((rendered.width(), rendered.height()), (64, 96))
+            self.assertNotEqual(rendered.pixelColor(30, 60), source.pixelColor(30, 60))
+            self.assertEqual(rendered.pixelColor(10, 60), source.pixelColor(10, 60))
+            self.assertIn("threshold", rendered.text("legend").lower())
+            self.assertIn("approximate", rendered.text("legend").lower())
+            self.assertEqual(rendered.text("region_threshold"), "0.65")
+            self.assertEqual(rendered.text("region_coordinate_system"), "source-image-pixels")
+
+            empty_destination = Path(temporary) / "empty-regions.png"
+            export_proposals_png(
+                empty_destination,
+                source,
+                self._reviewed_rows(),
+                selected_class="刮痕",
+                region_mask=np.zeros((96, 64), dtype=bool),
+                region_opacity=0.7,
+            )
+            empty = QImage(str(empty_destination))
+            self.assertEqual(empty.pixelColor(10, 60), source.pixelColor(10, 60))
+        app.processEvents()
+
     def test_bundle_publishes_three_unicode_destinations_atomically(self):
         app = QApplication.instance() or QApplication([])
         source = QImage(8, 6, QImage.Format_Grayscale8)

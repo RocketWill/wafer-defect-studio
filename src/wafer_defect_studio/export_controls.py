@@ -34,6 +34,8 @@ class ResultExportControls(QWidget):
         self._source_image: QImage | None = None
         self._rows: tuple[ReviewedProposalRow, ...] = ()
         self._confidence_map: Any = None
+        self._region_mask: Any = None
+        self._region_opacity = 0.7
         self._grid_rects: tuple[Any, ...] = ()
         self._export_callback: ExportCallback = export_result_bundle
 
@@ -97,6 +99,8 @@ class ResultExportControls(QWidget):
         selected_class: str,
         *,
         confidence_map: Any = None,
+        region_mask: Any = None,
+        region_opacity: float = 0.7,
         grid_rects: Iterable[Rect | Sequence[int] | Mapping[str, Any]] = (),
         export_callback: ExportCallback | None = None,
     ) -> None:
@@ -114,6 +118,8 @@ class ResultExportControls(QWidget):
         self._source_image = source_image.copy()
         self._rows = values
         self._confidence_map = confidence_map
+        self._region_mask = region_mask
+        self._region_opacity = region_opacity
         self._grid_rects = tuple(grid_rects)
         self._export_callback = export_callback or export_result_bundle
         self.selected_class_edit.setText(selected_class)
@@ -148,6 +154,17 @@ class ResultExportControls(QWidget):
         if source_image is None:
             self.status_label.setText("Export failed: no source image configured.")
             return
+        callback_kwargs = {
+            "selected_class": self.selected_class_edit.text().strip(),
+            "confidence_map": self._confidence_map,
+            "grid_rects": self._grid_rects,
+            "overwrite": self.overwrite_checkbox.isChecked(),
+        }
+        if self._region_mask is not None:
+            callback_kwargs.update(
+                region_mask=self._region_mask,
+                region_opacity=self._region_opacity,
+            )
         try:
             outcome = callback(
                 self.csv_path_edit.text().strip(),
@@ -155,10 +172,7 @@ class ResultExportControls(QWidget):
                 self.png_path_edit.text().strip(),
                 source_image,
                 self._rows,
-                selected_class=self.selected_class_edit.text().strip(),
-                confidence_map=self._confidence_map,
-                grid_rects=self._grid_rects,
-                overwrite=self.overwrite_checkbox.isChecked(),
+                **callback_kwargs,
             )
         except Exception as error:  # callback owns persistence/error policy
             self.status_label.setText(f"Export failed: {error}")

@@ -4,6 +4,10 @@ import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import numpy as np
 
 from wafer_defect_studio import project
 from wafer_defect_studio.evaluation_run import load_evaluation
@@ -11,10 +15,12 @@ from wafer_defect_studio.evaluation_worker import (
     EvaluationProgress,
     EvaluationRequest,
     EvaluationTerminal,
+    build_checkpoint_evaluation_request,
     create_evaluation_from_staged,
     decode_message,
     start_evaluation_worker,
 )
+from wafer_defect_studio.model_scoring import ModelScores
 from wafer_defect_studio.project import (
     _DATA_GROUPS_TABLE_SQL,
     _DATASET_SNAPSHOTS_TABLE_SQL,
@@ -32,6 +38,44 @@ from wafer_defect_studio.training_run import RunConfig, create_training_run, loa
 
 
 class EvaluationWorkerTest(unittest.TestCase):
+    def test_checkpoint_request_builder_uses_real_model_scores_and_run_provenance(self):
+        with TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "published"
+            artifact_path.mkdir()
+            run = SimpleNamespace(
+                run_id="run-1",
+                status="completed",
+                artifact_path=artifact_path,
+                snapshot_id="snapshot-1",
+                split_id="split-1",
+                environment={"python": "3.11"},
+            )
+            scores = ModelScores(
+                ("scratch", "particle"),
+                np.asarray([[1.0, 0.0]]),
+                np.asarray([[0.8, 0.2]]),
+            )
+            with patch("wafer_defect_studio.evaluation_worker.load_training_run", return_value=run), patch(
+                "wafer_defect_studio.evaluation_worker.score_training_bundle",
+                return_value=scores,
+            ) as scorer:
+                request = build_checkpoint_evaluation_request(
+                    Path(temporary_directory) / "project",
+                    "run-1",
+                    Path(temporary_directory) / "stage",
+                    request_id="evaluation-request-1",
+                )
+            scorer.assert_called_once_with(
+                artifact_path / "training_input_bundle.json",
+                artifact_path / "model.pt",
+                split="test",
+                device="cpu",
+            )
+            self.assertEqual(request.y_true, ((1, 0),))
+            self.assertEqual(request.y_score, ((0.8, 0.2),))
+            self.assertEqual(request.class_names, ("scratch", "particle"))
+            self.assertEqual(request.run_id, "run-1")
+
     def _project_with_run(self, root: Path) -> tuple[Path, object]:
         project_path = root / "project"
         project.create_project(project_path)

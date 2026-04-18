@@ -41,6 +41,14 @@ class TrainingProtocolTest(unittest.TestCase):
         self.assertEqual(decode_message(encoded), request)
         self.assertEqual(TrainingConfig.from_json(config.to_json()), config)
 
+        bundled = TrainingRequest(
+            request_id="run-2",
+            config=config,
+            artifact_staging_path="C:/project/staging/run-2",
+            input_bundle_path="C:/project/staging/run-2/training_input_bundle.json",
+        )
+        self.assertEqual(decode_message(encode_message(bundled)), bundled)
+
         messages = (
             ProgressMessage(
                 request_id="run-1",

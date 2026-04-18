@@ -1,8 +1,9 @@
-"""Run the smallest reproducible Wafer Defect Studio end-to-end demo.
+"""Run the smallest reproducible model-backed Wafer Defect Studio demo.
 
 The demo creates a temporary project, drives the real PySide6 shell and
 background workers, and keeps only screenshots plus a small JSON summary in
-the requested output directory.  It intentionally uses synthetic data.
+the requested output directory.  The source images are synthetic, but the
+Training, Evaluation, and Detection stages use the real checkpoint path.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -43,8 +46,8 @@ from wafer_defect_studio.evaluation_run import (
     record_evaluation_decision,
 )
 from wafer_defect_studio.evaluation_worker import (
-    EvaluationRequest,
     EvaluationTerminal,
+    build_checkpoint_evaluation_request,
     create_evaluation_from_staged,
     decode_message as decode_evaluation_message,
     start_evaluation_worker,
@@ -60,10 +63,13 @@ from wafer_defect_studio.grid_geometry import annotation_grids
 from wafer_defect_studio.grid_profile import load_grid_profiles, save_grid_profile
 from wafer_defect_studio.image_grid_placement import set_image_grid_origin
 from wafer_defect_studio.main_window import MainWindow
-from wafer_defect_studio.proposal_generation import generate_proposals
+from wafer_defect_studio.proposal_generation import (
+    generate_confidence_regions,
+    generate_proposals,
+)
 from wafer_defect_studio.result_export import export_proposals_png
 from wafer_defect_studio.review import mark_image_reviewed
-from wafer_defect_studio.training_run import load_training_run
+from wafer_defect_studio.training_run import load_training_run, validate_project_checkpoint
 from wafer_defect_studio.training_scope import DataGroup, assign_image_to_data_group, save_data_groups
 
 
@@ -99,6 +105,12 @@ def main() -> int:
             _activate_image(window, project_path, asset, grid_profile, "Training inputs ready")
             window.workspace_actions["Train"].trigger()
             training = _run_training(window, snapshot_id, split_id, app)
+            if training.artifact_path is None:
+                raise RuntimeError("demo Training completed without a published checkpoint")
+            checkpoint_path = training.artifact_path / "model.pt"
+            validate_project_checkpoint(checkpoint_path)
+            if not (training.artifact_path / "training_input_bundle.json").is_file():
+                raise RuntimeError("demo Training artifact is missing the real input bundle")
             _capture(window, output / "04-training-complete.png", app)
 
             evaluation = _run_evaluation(project_path, training.run_id, snapshot_id, split_id, Path(temporary))
@@ -120,10 +132,10 @@ def main() -> int:
                 project_path,
                 evaluation_id=evaluation.evaluation_id,
                 training_run_id=training.run_id,
-                window_size=(64, 48),
-                stride=(32, 24),
+                window_size=(32, 32),
+                stride=(16, 16),
                 reflect_padding=True,
-                thresholds={"scratch": 0.60, "particle": 0.60},
+                thresholds={"scratch": 0.0, "particle": 0.0},
                 center_weighting="linear",
                 map_generation={"smoothing": 1, "minimum_area": 1},
                 profile_id="demo-profile",
@@ -143,12 +155,21 @@ def main() -> int:
                 detection_profile,
                 app,
             )
+            if artifact.provenance.get("map_method") != "all_convolutional_sigmoid":
+                raise RuntimeError("demo refused a non-checkpoint-backed Detection artifact")
             _activate_image(window, project_path, asset, grid_profile, "Detection completed")
             window.workspace_actions["Detect"].trigger()
             _select_combo(window, "detectionProfileComboBox", detection_profile.profile_id)
             _select_combo(window, "detectionRunComboBox", detection_run_id)
             window.set_detection_artifact(artifact)
             _capture(window, output / "06-detection-controls.png", app)
+
+            window._detection_controls.region_mode_combo.setCurrentText("Heatmap")
+            _capture(window, output / "06-heatmap.png", app)
+            window._detection_controls.region_mode_combo.setCurrentText("Regions")
+            _capture(window, output / "07-regions.png", app)
+            window._detection_controls.region_mode_combo.setCurrentText("Both")
+            _capture(window, output / "08-both.png", app)
 
             source_image = QImage(str(source_path))
             proposals = generate_proposals(artifact, detection_profile)
@@ -172,7 +193,7 @@ def main() -> int:
                 participating,
                 class_names=("scratch", "particle"),
             )
-            heatmap_path = output / "06-heatmap.png"
+            heatmap_path = output / "06-heatmap-export.png"
             grid_rects = tuple(
                 (grid.x, grid.y, grid.width, grid.height)
                 for grid in annotation_grids(
@@ -190,6 +211,8 @@ def main() -> int:
                 (),
                 selected_class="scratch",
                 confidence_map=artifact.class_map("scratch"),
+                region_mask=generate_confidence_regions(artifact, detection_profile)["scratch"],
+                region_opacity=window._detection_controls.opacity_slider.value() / 100.0,
                 grid_rects=grid_rects,
                 overwrite=True,
             )
@@ -202,6 +225,7 @@ def main() -> int:
                 artifact,
                 heatmap_path,
                 validation,
+                detection_profile,
             )
             (output / "demo-summary.json").write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
@@ -255,12 +279,34 @@ def _seed_project(root: Path, app: QApplication):
         set_effective_ellipse(
             project_path,
             asset.image_asset_id,
-            256,
-            192,
-            174,
-            174,
+            64,
+            48,
+            42,
+            42,
         )
         confirm_effective_wafer_area(project_path, asset.image_asset_id)
+        for index in range(1, 10):
+            extra_path = root / f"synthetic-wafer-{index:02d}.png"
+            extra = _synthetic_wafer(index)
+            if not extra.save(str(extra_path), "PNG"):
+                raise RuntimeError(f"failed to write {extra_path}")
+            extra_asset = image_asset.register_wafer_image(project_path, extra_path)
+            set_image_grid_origin(
+                project_path,
+                extra_asset.image_asset_id,
+                profile.grid_profile_id,
+                0,
+                0,
+            )
+            set_effective_ellipse(
+                project_path,
+                extra_asset.image_asset_id,
+                64,
+                48,
+                42,
+                42,
+            )
+            confirm_effective_wafer_area(project_path, extra_asset.image_asset_id)
         save_defect_classes(
             project_path,
             (
@@ -269,7 +315,8 @@ def _seed_project(root: Path, app: QApplication):
             ),
         )
         save_data_groups(project_path, (DataGroup("demo-line", "Demo Line"),))
-        assign_image_to_data_group(project_path, asset.image_asset_id, "demo-line")
+        for item in image_asset.load_image_assets(project_path):
+            assign_image_to_data_group(project_path, item.asset.image_asset_id, "demo-line")
         _activate_image(window, project_path, asset, profile, "Image imported")
         return project_path, asset, source_path, profile
     finally:
@@ -278,26 +325,27 @@ def _seed_project(root: Path, app: QApplication):
         app.processEvents()
 
 
-def _synthetic_wafer() -> QImage:
-    image = QImage(512, 384, QImage.Format.Format_Grayscale8)
+def _synthetic_wafer(variant: int = 0) -> QImage:
+    image = QImage(128, 96, QImage.Format.Format_Grayscale8)
     image.fill(14)
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    gradient = QRadialGradient(QPointF(256, 192), 174)
+    gradient = QRadialGradient(QPointF(64, 48), 42)
     gradient.setColorAt(0.0, QColor(225, 225, 225))
     gradient.setColorAt(0.72, QColor(150, 150, 150))
     gradient.setColorAt(1.0, QColor(48, 48, 48))
     painter.setBrush(gradient)
     painter.setPen(QPen(QColor(245, 245, 245), 4))
-    painter.drawEllipse(QRectF(82, 18, 348, 348))
+    painter.drawEllipse(QRectF(22, 6, 84, 84))
     painter.setBrush(QColor(0, 0, 0, 0))
     painter.setPen(QPen(QColor(255, 230, 70), 2))
-    painter.drawEllipse(QRectF(94, 30, 324, 324))
+    painter.drawEllipse(QRectF(25, 9, 78, 78))
     painter.setPen(QPen(QColor(35, 35, 35), 9))
-    painter.drawLine(QPointF(168, 136), QPointF(334, 292))
+    offset = (variant % 3) - 1
+    painter.drawLine(QPointF(38 + offset, 37), QPointF(58 + offset, 57))
     painter.setPen(QPen(QColor(250, 250, 250), 3))
     painter.setBrush(QColor(245, 245, 245))
-    for x, y, radius in ((208, 164, 10), (306, 116, 7), (350, 216, 11), (220, 286, 5)):
+    for x, y, radius in ((80 + offset, 80, 5), (88, 32, 3), (96, 56, 4), (48, 72, 2)):
         painter.drawEllipse(QPointF(x, y), radius, radius)
     painter.end()
     return image
@@ -311,15 +359,22 @@ def _activate_image(window, project_path, asset, profile, status: str) -> None:
 
 def _prepare_annotation(window, project_path, asset, profile, app):
     annotations = {
-        (4, 5): ("scratch",),
-        (5, 8): ("particle",),
+        (1, 1): ("scratch",),
+        (2, 2): ("particle",),
     }
-    for (row, column), class_codes in annotations.items():
-        save_grid_annotation(
-            project_path,
-            GridAnnotation(asset.image_asset_id, row, column, class_codes),
-        )
-    mark_image_reviewed(project_path, asset.image_asset_id)
+    assets = [asset]
+    assets.extend(
+        item.asset
+        for item in image_asset.load_image_assets(project_path)
+        if item.asset.image_asset_id != asset.image_asset_id
+    )
+    for current in assets:
+        for (row, column), class_codes in annotations.items():
+            save_grid_annotation(
+                project_path,
+                GridAnnotation(current.image_asset_id, row, column, class_codes),
+            )
+        mark_image_reviewed(project_path, current.image_asset_id)
     window._image_view.set_annotations(annotations)
     window.set_selected_defect_classes(("scratch", "particle"))
     window.set_annotation_mode("Annotate")
@@ -338,6 +393,8 @@ def _create_dataset(project_path: Path) -> tuple[str, str]:
         ("scratch", "particle"),
     )
     split = create_dataset_split(project_path, snapshot_id, 42)
+    if not split.train_image_ids or not split.validation_image_ids or not split.test_image_ids:
+        raise RuntimeError("demo Dataset Split must contain train, validation, and test images")
     return snapshot_id, split.split_id
 
 
@@ -366,9 +423,11 @@ def _run_training(window: MainWindow, snapshot_id: str, split_id: str, app: QApp
         raise RuntimeError("Training status label is missing")
     _wait(
         app,
-        lambda: "Completed" in status.text(),
+        lambda: "Completed" in status.text() or "Failed" in status.text(),
         timeout=120,
     )
+    if "Failed" in status.text():
+        raise RuntimeError(f"Training failed: {status.text()}")
     connection = sqlite3.connect(window.active_project_path / "project.sqlite")
     try:
         run_id = connection.execute(
@@ -386,18 +445,16 @@ def _run_evaluation(
     split_id: str,
     root: Path,
 ):
-    request = EvaluationRequest(
+    request = build_checkpoint_evaluation_request(
+        project_path,
+        training_run_id,
+        root / "evaluation-stage",
         request_id="demo-evaluation-worker",
-        run_id=training_run_id,
-        snapshot_id=snapshot_id,
-        split_id=split_id,
-        y_true=((1, 0), (0, 1), (1, 1), (0, 0), (1, 0), (0, 1)),
-        y_score=((0.92, 0.08), (0.11, 0.88), (0.85, 0.81), (0.12, 0.21), (0.91, 0.15), (0.22, 0.90)),
-        staging_path=root / "evaluation-stage",
-        class_names=("scratch", "particle"),
+        split="test",
         thresholds=(0.5, 0.5),
-        environment={"device": "cpu", "demo": True},
-        notes="Synthetic two-class demo evaluation.",
+        criteria={"minimum_recall_target": 0.0},
+        notes="Checkpoint-backed two-class demo evaluation.",
+        device="cpu",
     )
     handle = start_evaluation_worker(request)
     terminal = _collect_worker(handle, decode_evaluation_message)
@@ -422,9 +479,11 @@ def _run_detection(window, project_path, asset, profile, app):
         raise RuntimeError("Detection status label is missing")
     _wait(
         app,
-        lambda: "Completed" in status.text(),
+        lambda: "Completed" in status.text() or "Failed" in status.text(),
         timeout=120,
     )
+    if "Failed" in status.text():
+        raise RuntimeError(f"Detection failed: {status.text()}")
     artifact = window._detection_controls.artifact
     if artifact is None:
         raise RuntimeError("Detection worker completed without a CAM artifact")
@@ -485,13 +544,18 @@ def _summary(
     artifact,
     heatmap_path,
     validation,
+    detection_profile,
 ):
     training = load_training_run(project_path, training_id)
     evaluation = load_evaluation(project_path, evaluation_id)
     detection = load_detection_run(project_path, detection_id)
+    checkpoint_path = training.artifact_path / "model.pt"
+    checkpoint = validate_project_checkpoint(checkpoint_path)
+    checkpoint_checksum = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
     finite = np.asarray(artifact.class_map("scratch"))[np.isfinite(artifact.class_map("scratch"))]
     return {
-        "synthetic": True,
+        "synthetic_source": True,
+        "model_backed": True,
         "source": {"width": source_image.width(), "height": source_image.height(), "format": "uint8 PNG"},
         "classes": ["scratch", "particle"],
         "training": {
@@ -501,10 +565,16 @@ def _summary(
             "epochs": training.config.epochs,
             "device": training.config.device,
             "metrics": training.metrics,
+            "checkpoint_sha256": checkpoint_checksum,
+            "checkpoint_format": checkpoint["checkpoint_format"],
+            "class_order": list(checkpoint["class_codes"]),
+            "input_size": checkpoint["input_size"],
         },
         "evaluation": {
             "evaluation_id": evaluation.evaluation_id,
+            "split_id": evaluation.split_id,
             "macro_f1": evaluation.metrics.get("macro_f1"),
+            "per_class": evaluation.metrics.get("per_class", []),
             "target_satisfied": evaluation.target_satisfied,
             "decisions": ["candidate", "validated", "approved"],
         },
@@ -513,11 +583,24 @@ def _summary(
             "status": detection.status,
             "class_names": list(artifact.class_names),
             "map_shape": list(artifact.maps.shape),
+            "map_method": artifact.provenance.get("map_method"),
+            "profile": {
+                "profile_id": detection_profile.profile_id,
+                "window_size": list(detection_profile.window_size),
+                "stride": list(detection_profile.stride),
+                "thresholds": dict(detection_profile.thresholds),
+                "map_generation": dict(detection_profile.map_generation),
+            },
             "scratch_min": float(np.min(finite)) if finite.size else None,
             "scratch_max": float(np.max(finite)) if finite.size else None,
             "heatmap": str(heatmap_path.name),
         },
         "annotation_validation": validation.to_dict(),
+        "validation_limitations": [
+            "Synthetic source images and fixed grid labels are for pipeline validation only.",
+            "Metrics are observed on one held-out image and are not production accuracy claims.",
+            "Confidence regions are approximate localization, not a segmentation mask.",
+        ],
     }
 
 

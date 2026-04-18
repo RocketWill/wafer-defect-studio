@@ -6,6 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import torch
+
 from wafer_defect_studio import project
 from wafer_defect_studio.defect_class import load_defect_classes
 from wafer_defect_studio.project import (
@@ -29,10 +31,21 @@ from wafer_defect_studio.training_run import (
     create_training_run,
     load_training_run,
     update_training_run_terminal,
+    validate_project_checkpoint,
 )
 
 
 class TrainingRunTest(unittest.TestCase):
+    def test_project_checkpoint_contract_rejects_incomplete_preprocessing(self):
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "model.pt"
+            _write_checkpoint(path, 1)
+            checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+            del checkpoint["normalization_bounds"]
+            torch.save(checkpoint, path)
+            with self.assertRaisesRegex(TrainingRunError, "incomplete"):
+                validate_project_checkpoint(path)
+
     def test_completed_run_requires_complete_environment_before_publish(self):
         with TemporaryDirectory() as temporary_directory:
             project_path = Path(temporary_directory) / "project"
@@ -214,7 +227,7 @@ class TrainingRunTest(unittest.TestCase):
                     connection.close()
 
             model = run.staging_path / "model.pt"
-            model.write_bytes(b"weights")
+            _write_checkpoint(model, run.config.class_count)
             (run.staging_path / "manifest.json").write_text(
                 json.dumps(
                     {
@@ -222,7 +235,7 @@ class TrainingRunTest(unittest.TestCase):
                         "files": [
                             {
                                 "path": "model.pt",
-                                "sha256": hashlib.sha256(b"weights").hexdigest(),
+                                "sha256": hashlib.sha256(model.read_bytes()).hexdigest(),
                             }
                         ],
                     }
@@ -298,7 +311,7 @@ def _prepare_training_project(project_path: Path) -> None:
 
 def _stage_valid_model(run) -> None:
     model = run.staging_path / "model.pt"
-    model.write_bytes(b"weights")
+    _write_checkpoint(model, run.config.class_count)
     (run.staging_path / "manifest.json").write_text(
         json.dumps(
             {
@@ -306,12 +319,37 @@ def _stage_valid_model(run) -> None:
                 "files": [
                     {
                         "path": "model.pt",
-                        "sha256": hashlib.sha256(b"weights").hexdigest(),
+                        "sha256": hashlib.sha256(model.read_bytes()).hexdigest(),
                     }
                 ],
             }
         ),
         encoding="utf-8",
+    )
+
+
+def _write_checkpoint(path: Path, class_count: int) -> None:
+    torch.save(
+        {
+            "checkpoint_format": "wafer_defect_studio.resnet18.v1",
+            "architecture": "resnet18",
+            "class_count": class_count,
+            "class_codes": [f"class-{index}" for index in range(class_count)],
+            "normalization_bounds": [
+                {
+                    "dtype": "uint8",
+                    "source_min": 0,
+                    "source_max": 255,
+                    "low": 0.0,
+                    "high": 255.0,
+                    "low_percentile": 1.0,
+                    "high_percentile": 99.0,
+                }
+            ],
+            "input_size": {"width": 32, "height": 32},
+            "state_dict": {"dummy": torch.zeros(1)},
+        },
+        path,
     )
 
 

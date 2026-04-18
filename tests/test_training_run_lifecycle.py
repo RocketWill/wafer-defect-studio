@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import torch
+
 from wafer_defect_studio import project
 from wafer_defect_studio.project import (
     _DATA_GROUPS_TABLE_SQL,
@@ -78,13 +80,13 @@ class TrainingRunLifecycleTest(unittest.TestCase):
             )
             parent = create_training_run(project_path, config, run_id="parent-run")
             checkpoint = parent.staging_path / "model.pt"
-            checkpoint.write_bytes(b"checkpoint")
+            _write_checkpoint(checkpoint, config.class_count)
             manifest = {
                 "required_files": ["model.pt"],
                 "files": [
                     {
                         "path": "model.pt",
-                        "sha256": hashlib.sha256(b"checkpoint").hexdigest(),
+                        "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
                     }
                 ],
             }
@@ -164,6 +166,31 @@ class TrainingRunLifecycleTest(unittest.TestCase):
                     environment={"python": ""},
                 )
             self.assertFalse((project_path / "runs" / "incomplete-clone").exists())
+
+
+def _write_checkpoint(path: Path, class_count: int) -> None:
+    torch.save(
+        {
+            "checkpoint_format": "wafer_defect_studio.resnet18.v1",
+            "architecture": "resnet18",
+            "class_count": class_count,
+            "class_codes": [f"class-{index}" for index in range(class_count)],
+            "normalization_bounds": [
+                {
+                    "dtype": "uint8",
+                    "source_min": 0,
+                    "source_max": 255,
+                    "low": 0.0,
+                    "high": 255.0,
+                    "low_percentile": 1.0,
+                    "high_percentile": 99.0,
+                }
+            ],
+            "input_size": {"width": 32, "height": 32},
+            "state_dict": {"dummy": torch.zeros(1)},
+        },
+        path,
+    )
 
 
 if __name__ == "__main__":

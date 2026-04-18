@@ -1,0 +1,166 @@
+import hashlib
+import json
+import sqlite3
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from wafer_defect_studio import project
+from wafer_defect_studio.dataset_snapshot import (
+    DatasetSnapshot,
+    SamplingPolicy,
+    SnapshotSample,
+    SnapshotSource,
+)
+from wafer_defect_studio.dataset_split import DatasetSplit
+from wafer_defect_studio.defect_class import DefectClass
+from wafer_defect_studio.normalization import NormalizationBounds
+from wafer_defect_studio.training_input_bundle import (
+    TrainingInputBundle,
+    TrainingInputBundleError,
+    create_training_input_bundle,
+)
+from wafer_defect_studio.training_scope import TrainingScope
+
+
+class TrainingInputBundleTest(unittest.TestCase):
+    def test_bundle_round_trip_is_deterministic_and_keeps_split_and_samples(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project_path = root / "project"
+            project.create_project(project_path)
+            source = root / "wafer.bin"
+            source.write_bytes(b"source")
+            _seed_project(project_path, source)
+            snapshot = DatasetSnapshot(
+                "snapshot-1",
+                "2026-01-01T00:00:00+00:00",
+                TrainingScope(("line-a",), ("scratch",)),
+                (DefectClass("scratch", "Scratch", "#cc4444"),),
+                (SnapshotSource("wafer-1", "line-a", _fingerprint(source)),),
+                (),
+                (),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                SamplingPolicy(1.0),
+                (SnapshotSample("wafer-1", 0, 0, 0, 0, 2, 2, ("scratch",)),),
+            )
+            split = DatasetSplit("split-1", "snapshot-1", 7, ("wafer-1",), (), ())
+            _insert_snapshot_and_split(project_path, snapshot, split)
+
+            destination = root / "bundle.json"
+            created = create_training_input_bundle(
+                project_path, "snapshot-1", "split-1", destination
+            )
+            self.assertEqual(TrainingInputBundle.from_json(destination.read_text()), created)
+            self.assertEqual(created.class_codes, ("scratch",))
+            self.assertEqual(created.sources[0].split, "train")
+            self.assertEqual(json.loads(destination.read_text())["samples"][0]["x"], 0)
+
+    def test_bundle_rejects_legacy_snapshot_without_frozen_samples(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project_path = root / "project"
+            project.create_project(project_path)
+            source = root / "wafer.bin"
+            source.write_bytes(b"source")
+            _seed_project(project_path, source)
+            snapshot = DatasetSnapshot(
+                "snapshot-1",
+                "2026-01-01T00:00:00+00:00",
+                TrainingScope(("line-a",), ("scratch",)),
+                (DefectClass("scratch", "Scratch", "#cc4444"),),
+                (SnapshotSource("wafer-1", "line-a", _fingerprint(source)),),
+                (),
+                (),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                SamplingPolicy(1.0),
+            )
+            _insert_snapshot_and_split(
+                project_path,
+                snapshot,
+                DatasetSplit("split-1", "snapshot-1", 7, ("wafer-1",), (), ()),
+            )
+            with self.assertRaisesRegex(TrainingInputBundleError, "no frozen training samples"):
+                create_training_input_bundle(
+                    project_path, "snapshot-1", "split-1", root / "bundle.json"
+                )
+
+
+def _seed_project(project_path: Path, source: Path) -> None:
+    connection = sqlite3.connect(project_path / "project.sqlite")
+    try:
+        connection.execute(
+            "INSERT INTO image_assets VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("wafer-1", str(source.resolve()), 2, 2, "uint8", "TIFF", _fingerprint(source), 0),
+        )
+        connection.execute(
+            project._DEFECT_CLASSES_TABLE_SQL
+        )
+        connection.execute(
+            project._GRID_ANNOTATIONS_TABLE_SQL
+        )
+        connection.execute(
+            project._IMAGE_REVIEWS_TABLE_SQL
+        )
+        connection.execute(
+            project._DATA_GROUPS_TABLE_SQL
+        )
+        connection.execute(
+            project._IMAGE_DATA_GROUPS_TABLE_SQL
+        )
+        connection.execute(
+            project._TRAINING_SCOPE_TABLE_SQL
+        )
+        connection.execute(project._DATASET_SNAPSHOTS_TABLE_SQL)
+        connection.execute(project._DATASET_SPLITS_TABLE_SQL)
+        connection.execute("INSERT INTO image_reviews VALUES ('wafer-1', 1)")
+        connection.execute("INSERT INTO effective_wafer_areas VALUES ('wafer-1', 'ellipse', '{\"center_x\":1,\"center_y\":1,\"radius_x\":1,\"radius_y\":1}', 1)")
+        connection.execute("INSERT INTO grid_profiles VALUES ('grid', 1, 2, 2)")
+        connection.execute("INSERT INTO image_grid_placements VALUES ('wafer-1', 'grid', 1, 0, 0)")
+        connection.execute("INSERT INTO defect_classes VALUES ('scratch', 'Scratch', '#cc4444', '', '', 0, 1)")
+        connection.execute("INSERT INTO data_groups VALUES ('line-a', 'Line A', 0)")
+        connection.execute("INSERT INTO image_data_groups VALUES ('wafer-1', 'line-a')")
+        connection.execute("INSERT INTO training_scope VALUES (1, '[\"line-a\"]', '[\"scratch\"]')")
+        connection.execute("UPDATE project_metadata SET schema_version = 12")
+        connection.execute("PRAGMA user_version = 12")
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _insert_snapshot_and_split(
+    project_path: Path, snapshot: DatasetSnapshot, split: DatasetSplit
+) -> None:
+    connection = sqlite3.connect(project_path / "project.sqlite")
+    try:
+        connection.execute(
+            "INSERT INTO dataset_snapshots VALUES (?, ?, ?)",
+            (snapshot.snapshot_id, snapshot.created_at, _snapshot_json(snapshot)),
+        )
+        connection.execute(
+            "INSERT INTO dataset_splits VALUES (?, ?, ?, ?)",
+            (split.split_id, split.snapshot_id, split.seed, _split_json(split)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _snapshot_json(snapshot: DatasetSnapshot) -> str:
+    from dataclasses import asdict
+
+    return json.dumps(asdict(snapshot), sort_keys=True, separators=(",", ":"))
+
+
+def _split_json(split: DatasetSplit) -> str:
+    from dataclasses import asdict
+
+    return json.dumps(asdict(split), sort_keys=True, separators=(",", ":"))
+
+
+def _fingerprint(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+if __name__ == "__main__":
+    unittest.main()

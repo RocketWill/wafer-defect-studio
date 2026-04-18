@@ -1,8 +1,9 @@
 {
-  "synthetic": true,
+  "synthetic_source": true,
+  "model_backed": true,
   "source": {
-    "width": 512,
-    "height": 384,
+    "width": 128,
+    "height": 96,
     "format": "uint8 PNG"
   },
   "classes": [
@@ -10,16 +11,55 @@
     "particle"
   ],
   "training": {
-    "run_id": "f7b17aaa-b0d1-40f4-af89-c17db58624b8",
+    "run_id": "81b874c1-2efe-4f7a-8511-54a89a257d25",
     "status": "completed",
     "architecture": "resnet18",
     "epochs": 1,
     "device": "cpu",
-    "metrics": {}
+    "metrics": {},
+    "checkpoint_sha256": "74fa06e6fc126bb82f06512a383c32349304e552eb1271260956b1fe8917d732",
+    "checkpoint_format": "wafer_defect_studio.resnet18.v1",
+    "class_order": [
+      "scratch",
+      "particle"
+    ],
+    "input_size": {
+      "width": 32,
+      "height": 32
+    }
   },
   "evaluation": {
     "evaluation_id": "demo-evaluation",
-    "macro_f1": 1.0,
+    "split_id": "8d9df7284bc7f429e91ed3219f75230aff33996b40febbcea6fc0ef13ee860ad",
+    "macro_f1": 0.0,
+    "per_class": [
+      {
+        "class_name": "scratch",
+        "f1": 0.0,
+        "false_negative": 1,
+        "false_positive": 0,
+        "fpr": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 1,
+        "threshold": 0.5,
+        "true_negative": 5,
+        "true_positive": 0
+      },
+      {
+        "class_name": "particle",
+        "f1": 0.0,
+        "false_negative": 1,
+        "false_positive": 0,
+        "fpr": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 1,
+        "threshold": 0.5,
+        "true_negative": 5,
+        "true_positive": 0
+      }
+    ],
     "target_satisfied": true,
     "decisions": [
       "candidate",
@@ -28,49 +68,74 @@
     ]
   },
   "detection": {
-    "run_id": "3151695a-2f5e-4128-94b1-1739ab6dc4e0",
+    "run_id": "0fec9810-3657-4b72-a3aa-a07c3b199508",
     "status": "completed",
     "class_names": [
-      "particle",
-      "scratch"
+      "scratch",
+      "particle"
     ],
     "map_shape": [
-      384,
-      512,
+      96,
+      128,
       2
     ],
+    "map_method": "all_convolutional_sigmoid",
+    "profile": {
+      "profile_id": "demo-profile",
+      "window_size": [
+        32,
+        32
+      ],
+      "stride": [
+        16,
+        16
+      ],
+      "thresholds": {
+        "scratch": 0.0,
+        "particle": 0.0
+      },
+      "map_generation": {
+        "smoothing": 1,
+        "minimum_area": 1
+      }
+    },
     "scratch_min": 0.0,
-    "scratch_max": 1.0,
-    "heatmap": "06-heatmap.png"
+    "scratch_max": 0.50461355342193,
+    "heatmap": "06-heatmap-export.png"
   },
   "annotation_validation": {
-    "evaluated_cells": 88,
-    "exact_cell_matches": 16,
-    "exact_match_rate": 0.18181818181818182,
-    "macro_f1": 0.0273972602739726,
+    "evaluated_cells": 6,
+    "exact_cell_matches": 0,
+    "exact_match_rate": 0.0,
+    "macro_f1": 0.2857142857142857,
     "classes": [
       {
         "class_name": "scratch",
         "true_positive": 1,
-        "false_positive": 71,
+        "false_positive": 5,
         "false_negative": 0,
         "support": 1,
-        "predicted_positive": 72,
-        "precision": 0.013888888888888888,
+        "predicted_positive": 6,
+        "precision": 0.16666666666666666,
         "recall": 1.0,
-        "f1": 0.0273972602739726
+        "f1": 0.2857142857142857
       },
       {
         "class_name": "particle",
         "true_positive": 1,
-        "false_positive": 71,
+        "false_positive": 5,
         "false_negative": 0,
         "support": 1,
-        "predicted_positive": 72,
-        "precision": 0.013888888888888888,
+        "predicted_positive": 6,
+        "precision": 0.16666666666666666,
         "recall": 1.0,
-        "f1": 0.0273972602739726
+        "f1": 0.2857142857142857
       }
     ]
-  }
+  },
+  "validation_limitations": [
+    "Synthetic source images and fixed grid labels are for pipeline validation only.",
+    "Metrics are observed on one held-out image and are not production accuracy claims.",
+    "Confidence regions are approximate localization, not a segmentation mask."
+  ]
 }

@@ -9,6 +9,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
+import torch
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
@@ -114,7 +115,28 @@ class MvpValidationSmokeTest(unittest.TestCase):
                 run_id="training-1",
             )
             model_path = training.staging_path / "model.pt"
-            model_path.write_bytes(b"synthetic model")
+            torch.save(
+                {
+                    "checkpoint_format": "wafer_defect_studio.resnet18.v1",
+                    "architecture": "resnet18",
+                    "class_count": 2,
+                    "class_codes": ["scratch", "stain"],
+                    "normalization_bounds": [
+                        {
+                            "dtype": "uint8",
+                            "source_min": 0,
+                            "source_max": 255,
+                            "low": 10.0,
+                            "high": 240.0,
+                            "low_percentile": 10.0,
+                            "high_percentile": 99.0,
+                        }
+                    ],
+                    "input_size": {"width": 16, "height": 12},
+                    "state_dict": {"fixture": torch.zeros(1)},
+                },
+                model_path,
+            )
             manifest = {
                 "required_files": ["model.pt"],
                 "files": [

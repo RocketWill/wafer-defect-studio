@@ -48,6 +48,18 @@ class TrainingDatasetTest(unittest.TestCase):
         self.assertTrue(torch.equal(patch16[0], patch16[2]))
         self.assertEqual(patch16.device.type, "cpu")
 
+    def test_native_patch_accepts_rectangular_snapshot_geometry(self):
+        source = np.array([[10, 20, 30], [40, 50, 60]], dtype=np.uint8)
+        patch = extract_model_patch(
+            source,
+            NormalizationBounds("uint8", 0, 255, 0.0, 60.0, 1.0, 99.0),
+            top=0,
+            left=0,
+            size=(3, 2),
+        )
+        self.assertEqual(patch.shape, (3, 2, 3))
+        self.assertEqual(float(patch[0, 1, 2]), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

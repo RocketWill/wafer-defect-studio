@@ -306,6 +306,8 @@ def export_proposals_png(
     *,
     selected_class: str,
     confidence_map: np.ndarray | Sequence[Sequence[Real]] | None = None,
+    region_mask: np.ndarray | Sequence[Sequence[bool]] | None = None,
+    region_opacity: float = 0.7,
     grid_rects: Iterable[Rect | Sequence[int] | Mapping[str, Any]] = (),
     overwrite: bool = True,
 ) -> Path:
@@ -337,13 +339,22 @@ def export_proposals_png(
     rendered = source_image.convertToFormat(QImage.Format_ARGB32)
     if confidence_map is not None:
         _paint_confidence_map(rendered, confidence_map)
+    selected_threshold = next(
+        (row.threshold for row in values if row.class_name == selected_name),
+        None,
+    )
+    if region_mask is not None:
+        _paint_confidence_regions(rendered, region_mask, region_opacity)
 
     painter = QPainter(rendered)
     try:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         _paint_proposal_rectangles(painter, values, selected_name)
         _paint_grid_rectangles(painter, grid_rects)
-        legend = _legend_text(selected_name)
+        legend = _legend_text(
+            selected_name,
+            selected_threshold if region_mask is not None else None,
+        )
         legend_height = min(height, max(18, min(48, height)))
         painter.fillRect(0, 0, width, legend_height, QColor(0, 0, 0, 190))
         painter.setPen(QPen(QColor("#ffffff")))
@@ -359,12 +370,21 @@ def export_proposals_png(
     finally:
         painter.end()
 
-    legend = _legend_text(selected_name)
+    legend = _legend_text(
+        selected_name,
+        selected_threshold if region_mask is not None else None,
+    )
     rendered.setText("legend", legend)
     rendered.setText("selected_class", selected_name)
     rendered.setText("confidence_meaning", "Confidence is a per-pixel score from 0 (low) to 1 (high).")
     rendered.setText("source_coordinate_system", SOURCE_COORDINATE_SYSTEM)
     rendered.setText("localization_warning", APPROXIMATE_LOCALIZATION_WARNING)
+    if region_mask is not None:
+        rendered.setText(
+            "region_threshold",
+            "" if selected_threshold is None else _number(selected_threshold),
+        )
+        rendered.setText("region_coordinate_system", SOURCE_COORDINATE_SYSTEM)
     if not rendered.save(str(path), "PNG"):
         raise OSError(f"failed to write PNG: {path}")
     return path
@@ -383,6 +403,8 @@ def export_result_bundle(
     *,
     selected_class: str,
     confidence_map: np.ndarray | Sequence[Sequence[Real]] | None = None,
+    region_mask: np.ndarray | Sequence[Sequence[bool]] | None = None,
+    region_opacity: float = 0.7,
     grid_rects: Iterable[Rect | Sequence[int] | Mapping[str, Any]] = (),
     overwrite: bool = False,
 ) -> ExportBundleResult:
@@ -422,6 +444,8 @@ def export_result_bundle(
             values,
             selected_class=selected_class,
             confidence_map=confidence_map,
+            region_mask=region_mask,
+            region_opacity=region_opacity,
             grid_rects=grid_rects,
             overwrite=True,
         )
@@ -532,6 +556,31 @@ def _paint_confidence_map(rendered: QImage, confidence_map: Any) -> None:
         painter.end()
 
 
+def _paint_confidence_regions(rendered: QImage, region_mask: Any, opacity: float) -> None:
+    if isinstance(opacity, bool) or not isinstance(opacity, Real) or not math.isfinite(float(opacity)):
+        raise ValueError("region_opacity must be a finite number between 0 and 1")
+    if not 0.0 <= float(opacity) <= 1.0:
+        raise ValueError("region_opacity must be a finite number between 0 and 1")
+    try:
+        values = np.asarray(region_mask, dtype=bool)
+    except (TypeError, ValueError) as error:
+        raise ValueError("region_mask must be a two-dimensional boolean array") from error
+    if values.shape != (rendered.height(), rendered.width()):
+        raise ValueError("region_mask dimensions must match the source image")
+    overlay = QImage(rendered.size(), QImage.Format_ARGB32)
+    overlay.fill(0)
+    alpha = int(round(float(opacity) * 255.0))
+    for y in range(rendered.height()):
+        for x in range(rendered.width()):
+            if values[y, x]:
+                overlay.setPixelColor(x, y, QColor(255, 80, 40, alpha))
+    painter = QPainter(rendered)
+    try:
+        painter.drawImage(0, 0, overlay)
+    finally:
+        painter.end()
+
+
 def _paint_proposal_rectangles(
     painter: QPainter,
     rows: Sequence[ReviewedProposalRow],
@@ -554,9 +603,12 @@ def _paint_grid_rectangles(
         painter.drawRect(rect.x, rect.y, max(0, rect.width - 1), max(0, rect.height - 1))
 
 
-def _legend_text(selected_class: str) -> str:
+def _legend_text(selected_class: str, threshold: float | None = None) -> str:
+    threshold_text = ""
+    if threshold is not None:
+        threshold_text = f" | threshold: {_number(threshold)}"
     return (
-        f"Class: {selected_class} | confidence: 0 (low) to 1 (high) | "
+        f"Class: {selected_class}{threshold_text} | confidence: 0 (low) to 1 (high) | "
         "Approximate localization (not a segmentation mask) | coordinates: source-image-pixels"
     )
 

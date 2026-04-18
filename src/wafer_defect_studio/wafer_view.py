@@ -8,6 +8,7 @@ from math import floor
 from pathlib import Path
 import sys
 
+import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QImageReader, QPixmap, QPolygonF, QTransform, QPen
 from PySide6.QtWidgets import (
@@ -56,6 +57,7 @@ class WaferView(QGraphicsView):
         self._grid_overlay_item: _GridOverlayItem | None = None
         self._effective_wafer_area: EffectiveWaferArea | None = None
         self._effective_area_item: QGraphicsItem | None = None
+        self._confidence_overlay_item: QGraphicsPixmapItem | None = None
         self._space_pressed = False
         self._drag_mode_before_space = QGraphicsView.DragMode.NoDrag
         self._tool_state = AnnotationToolState()
@@ -143,6 +145,67 @@ class WaferView(QGraphicsView):
         self._effective_wafer_area = area
         self._rebuild_effective_area_overlay()
 
+    def set_confidence_overlay(
+        self,
+        confidence: np.ndarray | None,
+        regions: np.ndarray | None,
+        *,
+        mode: str = "Both",
+        opacity: float = 0.7,
+    ) -> None:
+        """Render selected-class heatmap/retained-region values in source pixels."""
+
+        if mode not in {"Heatmap", "Regions", "Both"}:
+            raise ValueError("mode must be Heatmap, Regions, or Both")
+        if isinstance(opacity, bool) or not isinstance(opacity, (int, float)) or not 0.0 <= float(opacity) <= 1.0:
+            raise ValueError("opacity must be between 0 and 1")
+        loaded = self._loaded_wafer_image
+        if loaded is None:
+            self.clear_confidence_overlay()
+            return
+        confidence_values = None if confidence is None else np.asarray(confidence, dtype=float)
+        region_values = None if regions is None else np.asarray(regions, dtype=bool)
+        expected = (loaded.height, loaded.width)
+        if confidence_values is not None and confidence_values.shape != expected:
+            raise ValueError("confidence overlay shape must match the loaded source image")
+        if region_values is not None and region_values.shape != expected:
+            raise ValueError("confidence region shape must match the loaded source image")
+        self.clear_confidence_overlay()
+        if confidence_values is None and region_values is None:
+            return
+        image = QImage(loaded.width, loaded.height, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.transparent)
+        alpha = int(round(float(opacity) * 255.0))
+        for y in range(loaded.height):
+            for x in range(loaded.width):
+                color = None
+                if mode in {"Heatmap", "Both"} and confidence_values is not None:
+                    value = confidence_values[y, x]
+                    if np.isfinite(value):
+                        intensity = max(0.0, min(1.0, float(value)))
+                        color = QColor(int(255 * intensity), 40, int(255 * (1.0 - intensity)), alpha)
+                if mode in {"Regions", "Both"} and region_values is not None and region_values[y, x]:
+                    color = QColor(255, 80, 40, alpha)
+                if color is not None:
+                    image.setPixelColor(x, y, color)
+        item = self._scene.addPixmap(QPixmap.fromImage(image))
+        item.setTransformationMode(Qt.TransformationMode.FastTransformation)
+        item.setZValue(2)
+        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        item.setAcceptHoverEvents(False)
+        self._confidence_overlay_item = item
+        self._scene.invalidate()
+        self.viewport().update()
+
+    def clear_confidence_overlay(self) -> None:
+        """Remove the source-aligned confidence overlay from the scene."""
+
+        if self._confidence_overlay_item is not None:
+            self._scene.removeItem(self._confidence_overlay_item)
+            self._confidence_overlay_item = None
+            self._scene.invalidate()
+            self.viewport().update()
+
     def _set_loaded_image(self, loaded: LoadedWaferImage, image: QImage) -> None:
         self._loaded_wafer_image = loaded
         self._annotations = {}
@@ -159,6 +222,7 @@ class WaferView(QGraphicsView):
 
         self._grid_overlay_item = None
         self._effective_area_item = None
+        self._confidence_overlay_item = None
         self._scene.clear()
         item = self._scene.addPixmap(fitted)
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)

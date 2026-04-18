@@ -1,4 +1,6 @@
 import os
+import hashlib
+import json
 import queue
 import sqlite3
 import time
@@ -6,6 +8,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+
+import torch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -19,6 +23,7 @@ from wafer_defect_studio.detection_run import create_detection_profile
 from wafer_defect_studio.detection_worker import DetectionTerminal
 from wafer_defect_studio.image_asset import ImageAsset
 from wafer_defect_studio.main_window import MainWindow
+from wafer_defect_studio.training_run import load_training_run, update_training_run_terminal
 
 
 class _FakeHandle:
@@ -40,6 +45,7 @@ class ProjectDetectionLaunchTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             project_path = detection_run_test.DetectionRunTest()._project_with_approved_evaluation(root)
+            _complete_checkpoint(project_path)
             profile = create_detection_profile(
                 project_path,
                 evaluation_id="evaluation-1",
@@ -125,6 +131,48 @@ class ProjectDetectionLaunchTest(unittest.TestCase):
                 window.close()
                 window.deleteLater()
                 app.processEvents()
+
+
+def _complete_checkpoint(project_path: Path) -> None:
+    run = load_training_run(project_path, "run-1")
+    checkpoint = run.staging_path / "model.pt"
+    torch.save(
+        {
+            "checkpoint_format": "wafer_defect_studio.resnet18.v1",
+            "architecture": "resnet18",
+            "class_count": 1,
+            "class_codes": ["scratch"],
+            "normalization_bounds": [
+                {
+                    "dtype": "uint8",
+                    "source_min": 0,
+                    "source_max": 255,
+                    "low": 0.0,
+                    "high": 255.0,
+                    "low_percentile": 1.0,
+                    "high_percentile": 99.0,
+                }
+            ],
+            "input_size": {"width": 2, "height": 2},
+            "state_dict": {"dummy": torch.zeros(1)},
+        },
+        checkpoint,
+    )
+    (run.staging_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "required_files": ["model.pt"],
+                "files": [
+                    {
+                        "path": "model.pt",
+                        "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    update_training_run_terminal(project_path, run.run_id, "completed")
 
 
 if __name__ == "__main__":

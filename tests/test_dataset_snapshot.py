@@ -9,6 +9,7 @@ from wafer_defect_studio.annotation import GridAnnotation, save_grid_annotation
 from wafer_defect_studio.dataset_snapshot import (
     DatasetSnapshotError,
     SamplingPolicy,
+    SnapshotSample,
     create_dataset_snapshot,
     load_dataset_snapshot,
 )
@@ -77,6 +78,13 @@ class DatasetSnapshotTest(unittest.TestCase):
             self.assertEqual(frozen.sources[0].fingerprint, hashlib.sha256(source.read_bytes()).hexdigest())
             self.assertEqual(frozen.grid_versions[0].grid_profile_version, 1)
             self.assertTrue(frozen.annotation_versions[0].content_hash)
+            self.assertEqual(
+                frozen.samples,
+                (
+                    SnapshotSample("wafer-1", 0, 0, 0, 0, 2, 2, ("scratch",)),
+                    SnapshotSample("wafer-1", 0, 1, 2, 0, 2, 2, ()),
+                ),
+            )
             self.assertEqual(frozen.normalization_bounds, bounds)
             self.assertEqual(frozen.sampling_policy, SamplingPolicy(1.0))
 
@@ -112,7 +120,7 @@ def _seed_reviewed_image(project_path: Path, source: Path) -> None:
             (
                 "wafer-1",
                 str(source.resolve()),
-                2,
+                6,
                 2,
                 "uint8",
                 "TIFF",
@@ -121,7 +129,7 @@ def _seed_reviewed_image(project_path: Path, source: Path) -> None:
             ),
         )
         connection.execute(
-            "INSERT INTO grid_profiles VALUES ('grid', 1, 1, 1)"
+            "INSERT INTO grid_profiles VALUES ('grid', 1, 2, 2)"
         )
         connection.execute(
             "INSERT INTO image_grid_placements VALUES ('wafer-1', 'grid', 1, 0, 0)"
@@ -138,6 +146,10 @@ def _seed_reviewed_image(project_path: Path, source: Path) -> None:
         )
         connection.execute(
             "INSERT INTO grid_annotations VALUES ('wafer-1', 0, 0, '[\"scratch\"]')"
+        )
+        connection.execute(
+            "INSERT INTO effective_wafer_areas VALUES "
+            "('wafer-1', 'polygon', '{\"vertices\":[[0,0],[4,0],[4,2],[0,2]]}', 1)"
         )
         connection.execute(
             "CREATE TABLE image_reviews (image_asset_id TEXT PRIMARY KEY, reviewed INTEGER NOT NULL)"

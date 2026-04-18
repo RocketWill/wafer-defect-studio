@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from wafer_defect_studio.cam_detection import CamDetectionArtifact
-from wafer_defect_studio.proposal_generation import generate_proposals
+from wafer_defect_studio.proposal_generation import generate_confidence_regions, generate_proposals
 
 
 class ProposalGenerationTest(unittest.TestCase):
@@ -44,6 +44,18 @@ class ProposalGenerationTest(unittest.TestCase):
         self.assertAlmostEqual(proposals[0].mean_confidence, (0.80 + 0.20 + 0.85 + 0.88) / 4)
         self.assertEqual(proposals[0].provenance["run_id"], "run-1")
         self.assertEqual(proposals[0].provenance["profile_id"], "profile-1")
+        maps[0, 0, 0] = np.nan
+        regions = generate_confidence_regions(artifact, settings)
+        self.assertEqual(regions["scratch"].dtype, np.dtype(bool))
+        self.assertEqual(int(regions["scratch"].sum()), proposals[0].area)
+        self.assertEqual(int(regions["particle"].sum()), proposals[1].area)
+        self.assertFalse(regions["scratch"][0, 0])
+        self.assertEqual(
+            (int(np.where(regions["scratch"])[1].min()), int(np.where(regions["scratch"])[0].min()),
+             int(np.where(regions["scratch"])[1].max() - np.where(regions["scratch"])[1].min() + 1),
+             int(np.where(regions["scratch"])[0].max() - np.where(regions["scratch"])[0].min() + 1)),
+            proposals[0].source_rect,
+        )
 
 
 if __name__ == "__main__":
