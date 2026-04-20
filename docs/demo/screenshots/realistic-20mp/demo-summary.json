@@ -1,0 +1,148 @@
+{
+  "synthetic_source": false,
+  "source_kind": "realistic",
+  "model_backed": true,
+  "source": {
+    "width": 1536,
+    "height": 1536,
+    "format": "uint8 PNG",
+    "processing_proxy": true
+  },
+  "source_original": {
+    "width": 4472,
+    "height": 4472,
+    "format": "uint8 PNG"
+  },
+  "classes": [
+    "scratch",
+    "particle"
+  ],
+  "training": {
+    "run_id": "08944b08-98bb-4012-8219-f4829cd2b9b9",
+    "status": "completed",
+    "architecture": "resnet18",
+    "epochs": 20,
+    "device": "cuda",
+    "metrics": {},
+    "checkpoint_sha256": "1580a67ae16e504a41e4d2e607e7e477ec8fc677c725f13823ac96a65fc7e357",
+    "checkpoint_format": "wafer_defect_studio.resnet18.v2",
+    "class_order": [
+      "scratch",
+      "particle"
+    ],
+    "input_size": {
+      "width": 512,
+      "height": 512
+    }
+  },
+  "evaluation": {
+    "evaluation_id": "demo-evaluation",
+    "split_id": "fc0e0e82361699a585201a4be529f1eef9dae6b1e464fe513b4acc33c902503c",
+    "macro_f1": 0.5,
+    "per_class": [
+      {
+        "class_name": "scratch",
+        "f1": 0.0,
+        "false_negative": 1,
+        "false_positive": 0,
+        "fpr": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 1,
+        "threshold": 0.1861439347267151,
+        "true_negative": 8,
+        "true_positive": 0
+      },
+      {
+        "class_name": "particle",
+        "f1": 1.0,
+        "false_negative": 0,
+        "false_positive": 0,
+        "fpr": 0.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 2,
+        "threshold": 0.37573081254959106,
+        "true_negative": 7,
+        "true_positive": 2
+      }
+    ],
+    "target_satisfied": true,
+    "decisions": [
+      "candidate",
+      "validated",
+      "approved"
+    ]
+  },
+  "detection": {
+    "run_id": "c4de7a3e-fd46-42f7-a4d7-5af822c71862",
+    "status": "completed",
+    "class_names": [
+      "scratch",
+      "particle"
+    ],
+    "map_shape": [
+      1536,
+      1536,
+      2
+    ],
+    "map_method": "all_convolutional_sigmoid",
+    "profile": {
+      "profile_id": "demo-profile",
+      "window_size": [
+        512,
+        512
+      ],
+      "stride": [
+        512,
+        512
+      ],
+      "thresholds": {
+        "scratch": 0.5,
+        "particle": 0.5
+      },
+      "map_generation": {
+        "smoothing": 1,
+        "minimum_area": 1
+      }
+    },
+    "scratch_min": 6.617086182814091e-05,
+    "scratch_max": 0.5810440182685852,
+    "heatmap": "06-heatmap-export.png"
+  },
+  "annotation_validation": {
+    "evaluated_cells": 9,
+    "exact_cell_matches": 2,
+    "exact_match_rate": 0.2222222222222222,
+    "macro_f1": 0.5151515151515151,
+    "classes": [
+      {
+        "class_name": "scratch",
+        "true_positive": 1,
+        "false_positive": 1,
+        "false_negative": 0,
+        "support": 1,
+        "predicted_positive": 2,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666
+      },
+      {
+        "class_name": "particle",
+        "true_positive": 2,
+        "false_positive": 7,
+        "false_negative": 0,
+        "support": 2,
+        "predicted_positive": 9,
+        "precision": 0.2222222222222222,
+        "recall": 1.0,
+        "f1": 0.3636363636363636
+      }
+    ]
+  },
+  "validation_limitations": [
+    "Generated 20MP source was resized to a 1536px processing proxy; fixed grid labels are for pipeline validation only.",
+    "Metrics are observed on one held-out image and are not production accuracy claims.",
+    "Confidence regions are approximate localization, not a segmentation mask."
+  ]
+}

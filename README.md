@@ -44,18 +44,28 @@ not pixel-accurate segmentation masks.
 
 ### End-to-end demo
 
-可用一個可重跑的 synthetic-source project 走過匯入、兩類標註、Dataset
-Snapshot、真實 checkpoint-backed ResNet18 訓練、Evaluation approval、Detection
-與 native-coordinate Heatmap/Regions/Both：
+推薦用 repo 內的 generated 20MP wafer source，在 CUDA 上走過匯入、兩類標註、
+Dataset Snapshot、真實 checkpoint-backed ResNet18 訓練、Evaluation approval、
+Detection 與 native-coordinate Heatmap/Regions/Both：
 
 ```powershell
 $env:QT_QPA_PLATFORM = "offscreen"
 $env:QT_QPA_FONTDIR = "C:/Windows/Fonts"
-& 'E:\miniconda3\envs\wafer-defect-studio\python.exe' docs/demo/run_phase2_demo.py
+& 'E:\miniconda3\envs\wafer-defect-studio\python.exe' docs/demo/run_phase2_demo.py `
+  --source-image docs/demo/assets/realistic-wafer-20mp.png `
+  --output .\docs\demo\screenshots\realistic-20mp
 ```
 
+這張 4,472×4,472（19,998,784 pixels）圖片是生成並放大的尺寸參考，不是真實
+量測資料。runner 以 1,536×1,536 processing proxy 建立十張 deterministic、
+彼此不同的 generated wafer bases，並按 Wafer Image 隔離 train/validation/test；
+`demo-summary.json` 同時保留輸入尺寸。Regions 的高置信顯示下限為 `0.5`，是
+Demo 可視化門檻，不是 production threshold tuning。
+
+若只要快速驗證 UI 串接，可省略 `--source-image` 使用 synthetic source。
+
 完整步驟、每階段截圖、checkpoint checksum、標註與 Proposal 的正式比對數據，
-以及 synthetic-source validation 邊界請參考
+以及 generated-source、processing proxy 與 validation 邊界請參考
 [Phase 2 端到端 Demo 教學](docs/demo/phase2-end-to-end-tutorial.md)。
 
 ## Capabilities
@@ -146,10 +156,12 @@ and the [MVP validation report](.scratch/wafer-defect-classification/mvp-validat
 - The remaining tests passed; `py_compile` and `git diff --check` passed.
 
 The end-to-end demo also completes real Snapshot-backed Training,
-checkpoint-scored Evaluation, Approved Run Detection, and same-mask
-Heatmap/Regions/Both rendering. Its observed checksum and metrics are kept in
-[`docs/demo/screenshots/demo-summary.json`](docs/demo/screenshots/demo-summary.json);
-synthetic source images and the small held-out split are explicit limitations.
+checkpoint-scored Evaluation, Approved Run Detection, and same-artifact
+Heatmap/Regions/Both rendering. The latest generated-source screenshots and
+observed checksum/metrics are kept in
+[`docs/demo/screenshots/realistic-20mp/`](docs/demo/screenshots/realistic-20mp/);
+the generated corpus, 1,536px processing proxy, one-image held-out splits, and
+observed annotation-match score are explicit limitations rather than accuracy claims.
 
 Those four failures are outside the active Phase 2 project path and are kept
 visible rather than reported as a green full suite.
