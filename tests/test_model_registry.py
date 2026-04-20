@@ -15,8 +15,40 @@ from wafer_defect_studio.model_registry import (
 
 
 class ModelRegistryTest(unittest.TestCase):
+    def test_default_stride16_preserves_legacy_state_dict_shapes(self):
+        current = create_resnet18(2, device="cpu")
+        legacy = create_resnet18(2, device="cpu", feature_stride=32)
+        current.eval()
+        legacy.eval()
+        current_features = []
+        legacy_features = []
+        current_hook = current.backbone.layer4.register_forward_hook(
+            lambda _module, _inputs, output: current_features.append(output.shape[-2:])
+        )
+        legacy_hook = legacy.backbone.layer4.register_forward_hook(
+            lambda _module, _inputs, output: legacy_features.append(output.shape[-2:])
+        )
+        try:
+            with torch.no_grad():
+                current(torch.zeros((1, 1, 64, 64)))
+                legacy(torch.zeros((1, 1, 64, 64)))
+        finally:
+            current_hook.remove()
+            legacy_hook.remove()
+        self.assertEqual(current_features, [torch.Size((4, 4))])
+        self.assertEqual(legacy_features, [torch.Size((2, 2))])
+        self.assertEqual(
+            {name: value.shape for name, value in current.state_dict().items()},
+            {name: value.shape for name, value in legacy.state_dict().items()},
+        )
+
     def test_project_checkpoint_load_preserves_logits_and_contract(self):
-        source = create_resnet18(2, weights=WeightsPolicy.NONE, device="cpu")
+        source = create_resnet18(
+            2,
+            weights=WeightsPolicy.NONE,
+            device="cpu",
+            feature_stride=32,
+        )
         source.eval()
         with TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "model.pt"
@@ -52,6 +84,49 @@ class ModelRegistryTest(unittest.TestCase):
             with torch.no_grad():
                 self.assertTrue(torch.equal(source(inputs), loaded(inputs)))
             self.assertEqual(checkpoint["class_codes"], ["scratch", "particle"])
+            legacy_features = []
+            legacy_hook = loaded.backbone.layer4.register_forward_hook(
+                lambda _module, _inputs, output: legacy_features.append(output.shape[-2:])
+            )
+            try:
+                with torch.no_grad():
+                    loaded(torch.zeros((1, 1, 64, 64)))
+            finally:
+                legacy_hook.remove()
+            self.assertEqual(legacy_features, [torch.Size((2, 2))])
+
+            v2_path = Path(temporary_directory) / "model-v2.pt"
+            torch.save(
+                {
+                    **checkpoint,
+                    "checkpoint_format": "wafer_defect_studio.resnet18.v2",
+                    "feature_stride": 16,
+                },
+                v2_path,
+            )
+            loaded_v2, _ = load_project_checkpoint(v2_path, device="cpu")
+            features = []
+            hook = loaded_v2.backbone.layer4.register_forward_hook(
+                lambda _module, _inputs, output: features.append(output.shape[-2:])
+            )
+            try:
+                with torch.no_grad():
+                    loaded_v2(torch.zeros((1, 1, 64, 64)))
+            finally:
+                hook.remove()
+            self.assertEqual(features, [torch.Size((4, 4))])
+
+            for feature_stride in (None, 32):
+                invalid_path = Path(temporary_directory) / f"invalid-{feature_stride}.pt"
+                invalid = {
+                    **checkpoint,
+                    "checkpoint_format": "wafer_defect_studio.resnet18.v2",
+                }
+                if feature_stride is not None:
+                    invalid["feature_stride"] = feature_stride
+                torch.save(invalid, invalid_path)
+                with self.assertRaisesRegex(ModelRegistryError, "feature_stride must be 16"):
+                    load_project_checkpoint(invalid_path, device="cpu")
 
     def test_resnet18_contract_is_multilabel_and_duplicates_grayscale(self):
         model = create_resnet18(3, weights=WeightsPolicy.NONE, device="cpu")

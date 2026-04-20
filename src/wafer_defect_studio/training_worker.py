@@ -40,7 +40,7 @@ class TrainingWorkerError(RuntimeError):
     """Raised when a worker request cannot be started or validated."""
 
 
-_CHECKPOINT_FORMAT = "wafer_defect_studio.resnet18.v1"
+_CHECKPOINT_FORMAT = "wafer_defect_studio.resnet18.v2"
 
 
 @dataclass(slots=True)
@@ -375,6 +375,7 @@ def _write_staged_artifacts(
     checkpoint = {
         "checkpoint_format": _CHECKPOINT_FORMAT,
         "architecture": "resnet18",
+        "feature_stride": 16,
         "class_count": config.class_count,
         "class_codes": list(bundle.class_codes) if bundle is not None else [
             f"class-{index}" for index in range(config.class_count)

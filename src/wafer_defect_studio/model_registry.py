@@ -78,11 +78,20 @@ class ResNet18Classifier(nn.Module):
 
     architecture = "resnet18"
 
-    def __init__(self, class_count: int, *, weights: WeightsPolicy = WeightsPolicy.NONE) -> None:
+    def __init__(
+        self,
+        class_count: int,
+        *,
+        weights: WeightsPolicy = WeightsPolicy.NONE,
+        feature_stride: int = 16,
+    ) -> None:
         super().__init__()
         if isinstance(class_count, bool) or not isinstance(class_count, int) or class_count < 1:
             raise ModelRegistryError("class_count must be a positive integer")
         self.class_count = class_count
+        if feature_stride not in {16, 32}:
+            raise ModelRegistryError("feature_stride must be 16 or 32")
+        self.feature_stride = feature_stride
         self.weights_policy = _coerce_weights_policy(weights)
         torchvision_weights = (
             None
@@ -90,6 +99,9 @@ class ResNet18Classifier(nn.Module):
             else ResNet18_Weights.DEFAULT
         )
         self.backbone = resnet18(weights=torchvision_weights)
+        if feature_stride == 16:
+            self.backbone.layer4[0].conv1.stride = (1, 1)
+            self.backbone.layer4[0].downsample[0].stride = (1, 1)
         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, class_count)
 
     def forward(self, inputs: Tensor) -> Tensor:
@@ -109,6 +121,7 @@ class ModelRegistry:
         weights: WeightsPolicy | str | None = WeightsPolicy.NONE,
         device: str | torch.device | None = None,
         weights_path: str | Path | None = None,
+        feature_stride: int = 16,
     ) -> ResNet18Classifier:
         if not isinstance(architecture, str) or architecture.lower() != "resnet18":
             raise ModelRegistryError(
@@ -116,7 +129,11 @@ class ModelRegistry:
             )
         if weights_path is not None:
             raise ModelRegistryError("External .pth loading is not supported")
-        model = ResNet18Classifier(class_count, weights=_coerce_weights_policy(weights))
+        model = ResNet18Classifier(
+            class_count,
+            weights=_coerce_weights_policy(weights),
+            feature_stride=feature_stride,
+        )
         return model.to(resolve_device(device))
 
 
@@ -126,6 +143,7 @@ def create_resnet18(
     weights: WeightsPolicy | str | None = WeightsPolicy.NONE,
     device: str | torch.device | None = None,
     weights_path: str | Path | None = None,
+    feature_stride: int = 16,
 ) -> ResNet18Classifier:
     """Create the supported multi-label ResNet18 on the resolved device."""
 
@@ -135,6 +153,7 @@ def create_resnet18(
         weights=weights,
         device=device,
         weights_path=weights_path,
+        feature_stride=feature_stride,
     )
 
 
@@ -145,6 +164,7 @@ def create_model(
     weights: WeightsPolicy | str | None = WeightsPolicy.NONE,
     device: str | torch.device | None = None,
     weights_path: str | Path | None = None,
+    feature_stride: int = 16,
 ) -> ResNet18Classifier:
     """Create a model through the internal architecture registry."""
 
@@ -154,6 +174,7 @@ def create_model(
         weights=weights,
         device=device,
         weights_path=weights_path,
+        feature_stride=feature_stride,
     )
 
 
@@ -182,6 +203,7 @@ def load_project_checkpoint(
         checkpoint["class_count"],
         weights=WeightsPolicy.NONE,
         device=device,
+        feature_stride=32 if checkpoint["checkpoint_format"].endswith(".v1") else 16,
     )
     try:
         model.load_state_dict(checkpoint["state_dict"], strict=True)

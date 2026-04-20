@@ -74,6 +74,11 @@ class TrainingWorkerTest(unittest.TestCase):
                 {path.name for path in validate_staged_artifacts(root / "staging")},
             )
             checkpoint = validate_project_checkpoint(root / "staging" / "model.pt")
+            self.assertEqual(
+                checkpoint["checkpoint_format"],
+                "wafer_defect_studio.resnet18.v2",
+            )
+            self.assertEqual(checkpoint["feature_stride"], 16)
             self.assertEqual(checkpoint["class_codes"], ["scratch"])
             self.assertEqual(checkpoint["input_size"], {"width": 32, "height": 32})
 

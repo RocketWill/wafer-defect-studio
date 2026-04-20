@@ -48,7 +48,8 @@ REQUIRED_ENVIRONMENT_KEYS = (
 )
 _OOM_ERROR_CODES = {"out_of_memory", "oom"}
 _CHECKPOINT_NAME = "model.pt"
-_CHECKPOINT_FORMAT = "wafer_defect_studio.resnet18.v1"
+_CHECKPOINT_FORMAT_V1 = "wafer_defect_studio.resnet18.v1"
+_CHECKPOINT_FORMAT_V2 = "wafer_defect_studio.resnet18.v2"
 _IMMUTABLE_COLUMNS = (
     "run_id",
     "created_at",
@@ -508,8 +509,10 @@ def validate_project_checkpoint(
         raise TrainingRunError(
             f"project checkpoint metadata is incomplete: {', '.join(sorted(missing))}"
         )
-    if value["checkpoint_format"] != _CHECKPOINT_FORMAT:
+    if value["checkpoint_format"] not in {_CHECKPOINT_FORMAT_V1, _CHECKPOINT_FORMAT_V2}:
         raise TrainingRunError("unsupported project checkpoint format")
+    if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V2 and value.get("feature_stride") != 16:
+        raise TrainingRunError("resnet18.v2 checkpoint feature_stride must be 16")
     if value["architecture"] != "resnet18":
         raise TrainingRunError("project checkpoint architecture must be resnet18")
     class_codes = value["class_codes"]
