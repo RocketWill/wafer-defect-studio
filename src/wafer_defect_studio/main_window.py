@@ -129,6 +129,7 @@ from .training_run import (
     validate_project_checkpoint,
 )
 from .training_worker import start_training_worker
+from .model_registry import resolve_device
 from .wafer_loader import WaferLoader
 from .wafer_view import LoadedWaferImage, WaferView, _decode_wafer_image
 
@@ -2637,6 +2638,7 @@ class MainWindow(QMainWindow):
                 stride=profile.stride,
                 reflect_padding=profile.reflect_padding,
                 center_weighting=profile.center_weighting,
+                device=str(resolve_device(training.config.device)),
                 checkpoint_path=checkpoint_path,
                 batch_size=8,
                 model_id=f"training-run:{training.run_id}",
