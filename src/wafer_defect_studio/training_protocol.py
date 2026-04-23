@@ -63,6 +63,8 @@ class TrainingConfig(_VersionedMessage):
     seed: int = 0
     learning_rate: float = 0.001
     weights_policy: str = "none"
+    patch_size: int | None = None
+    patch_stride: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("snapshot_id", "split_id", "architecture", "device", "weights_policy"):
@@ -82,6 +84,28 @@ class TrainingConfig(_VersionedMessage):
             or self.learning_rate <= 0
         ):
             raise TrainingProtocolError("learning_rate must be a positive finite number")
+        if (self.patch_size is None) != (self.patch_stride is None):
+            raise TrainingProtocolError(
+                "patch_size and patch_stride must be provided together"
+            )
+        if self.patch_size is not None:
+            _require_positive_int(self.patch_size, "patch_size")
+            _require_positive_int(self.patch_stride, "patch_stride")
+            if self.patch_stride > self.patch_size:
+                raise TrainingProtocolError("patch_stride cannot exceed patch_size")
+
+    def validate_patch_geometry(self, sample_width: int, sample_height: int) -> None:
+        """Reject configured Model Patches that cannot fit one frozen Grid sample."""
+
+        _require_positive_int(sample_width, "sample_width")
+        _require_positive_int(sample_height, "sample_height")
+        if self.patch_size is None:
+            raise TrainingProtocolError("patch geometry is not configured")
+        if self.patch_size > sample_width or self.patch_size > sample_height:
+            raise TrainingProtocolError(
+                f"patch_size {self.patch_size} exceeds sample rectangle "
+                f"{sample_width}x{sample_height}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,12 +119,19 @@ class TrainingConfig(_VersionedMessage):
             "seed": self.seed,
             "learning_rate": self.learning_rate,
             "weights_policy": self.weights_policy,
+            "patch_size": self.patch_size,
+            "patch_stride": self.patch_stride,
         }
 
     @classmethod
     def from_dict(cls, value: Any) -> "TrainingConfig":
         _require_object(value, "config")
-        _require_keys(value, {item.name for item in fields(cls)}, "config")
+        expected = {item.name for item in fields(cls)}
+        legacy = expected - {"patch_size", "patch_stride"}
+        if set(value) == legacy:
+            value = {**value, "patch_size": None, "patch_stride": None}
+        else:
+            _require_keys(value, expected, "config")
         try:
             return cls(**value)
         except (TypeError, ValueError) as error:
