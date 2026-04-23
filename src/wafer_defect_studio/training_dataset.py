@@ -7,7 +7,9 @@ from math import isfinite
 import numpy as np
 import torch
 
+from .detection_windows import Rect
 from .normalization import NormalizationBounds
+from .training_protocol import TrainingConfig
 
 
 class TrainingDatasetError(ValueError):
@@ -18,6 +20,37 @@ _NATIVE_RANGES = {
     "uint8": (np.dtype(np.uint8), 0, 255, torch.uint8),
     "uint16": (np.dtype(np.uint16), 0, 65535, torch.uint16),
 }
+
+
+def enumerate_model_patch_rects(
+    grid_rect: Rect,
+    config: TrainingConfig,
+) -> tuple[Rect, ...]:
+    """Cover one frozen Annotation Grid with ordered source-coordinate patches."""
+
+    config.validate_patch_geometry(grid_rect.width, grid_rect.height)
+    patch_size = int(config.patch_size)
+    patch_stride = int(config.patch_stride)
+    x_starts = _patch_starts(grid_rect.width, patch_size, patch_stride)
+    y_starts = _patch_starts(grid_rect.height, patch_size, patch_stride)
+    return tuple(
+        Rect(
+            grid_rect.x + left,
+            grid_rect.y + top,
+            patch_size,
+            patch_size,
+        )
+        for top in y_starts
+        for left in x_starts
+    )
+
+
+def _patch_starts(length: int, patch_size: int, patch_stride: int) -> tuple[int, ...]:
+    starts = list(range(0, length - patch_size + 1, patch_stride))
+    edge = length - patch_size
+    if starts[-1] != edge:
+        starts.append(edge)
+    return tuple(starts)
 
 
 def extract_model_patch(
@@ -111,4 +144,4 @@ def _reflect_indices(start: int, size: int, length: int) -> np.ndarray:
     return np.where(folded < length, folded, period - folded)
 
 
-__all__ = ["TrainingDatasetError", "extract_model_patch"]
+__all__ = ["TrainingDatasetError", "enumerate_model_patch_rects", "extract_model_patch"]
