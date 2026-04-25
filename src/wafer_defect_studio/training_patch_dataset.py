@@ -113,6 +113,22 @@ class TrainingPatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __len__(self) -> int:
         return len(self._items)
 
+    @property
+    def bag_shape_keys(self) -> tuple[tuple[int, ...], ...] | None:
+        """Return v2 tensor shapes from descriptors without reading source pixels."""
+
+        if self._bundle.version != 2:
+            return None
+        return tuple(
+            (
+                len(bag.patches),
+                3,
+                bag.patches[0].height,
+                bag.patches[0].width,
+            )
+            for bag in self._items
+        )
+
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         item = self._items[index]
         source = self._sources[item.image_asset_id]

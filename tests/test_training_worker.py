@@ -8,8 +8,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PySide6.QtGui import QImage
+import torch
 
 from wafer_defect_studio.dataset_snapshot import SnapshotSample
+from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.normalization import NormalizationBounds
 from wafer_defect_studio.training_protocol import (
     ProgressMessage,
@@ -19,11 +21,91 @@ from wafer_defect_studio.training_protocol import (
     decode_message,
 )
 from wafer_defect_studio.training_run import validate_project_checkpoint, validate_staged_artifacts
-from wafer_defect_studio.training_worker import run_worker, start_training_worker
-from wafer_defect_studio.training_input_bundle import TrainingBundleSource, TrainingInputBundle
+from wafer_defect_studio.training_worker import (
+    create_training_data_loader,
+    run_worker,
+    start_training_worker,
+)
+from wafer_defect_studio.training_input_bundle import (
+    TrainingBundleSource,
+    TrainingInputBundle,
+    TrainingPatchBag,
+)
+from wafer_defect_studio.training_patch_dataset import TrainingPatchDataset
 
 
 class TrainingWorkerTest(unittest.TestCase):
+    def test_v2_loader_batches_equal_shapes_with_repeatable_membership(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "bags.png"
+            image = QImage(3, 2, QImage.Format.Format_Grayscale8)
+            bits = image.bits()
+            stride = image.bytesPerLine()
+            bits[0:stride] = bytes((10, 20, 30)) + bytes(stride - 3)
+            bits[stride : 2 * stride] = bytes((40, 50, 60)) + bytes(stride - 3)
+            self.assertTrue(image.save(str(source), "PNG"))
+            del bits, image
+            bundle = TrainingInputBundle(
+                "snapshot-1",
+                "split-1",
+                ("scratch", "particle"),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                (TrainingBundleSource("wafer-1", "train", str(source), _hash(source), "uint8"),),
+                (),
+                2,
+                (
+                    TrainingPatchBag("bag-0", "wafer-1", 0, 0, (Rect(0, 0, 1, 1),), ("scratch",)),
+                    TrainingPatchBag("bag-1", "wafer-1", 0, 1, (Rect(1, 0, 1, 1), Rect(2, 0, 1, 1)), ("particle",)),
+                    TrainingPatchBag("bag-2", "wafer-1", 1, 0, (Rect(0, 1, 1, 1),), ("scratch", "particle")),
+                    TrainingPatchBag("bag-3", "wafer-1", 1, 1, (Rect(1, 1, 1, 1), Rect(2, 1, 1, 1)), ()),
+                ),
+            )
+            config = TrainingConfig(
+                snapshot_id="snapshot-1",
+                split_id="split-1",
+                class_count=2,
+                epochs=1,
+                batch_size=2,
+                seed=17,
+                patch_size=1,
+                patch_stride=1,
+            )
+
+            def collect():
+                loader = create_training_data_loader(
+                    TrainingPatchDataset(bundle, "train"),
+                    config,
+                    split="train",
+                )
+                return tuple((inputs.clone(), targets.clone()) for inputs, targets in loader)
+
+            first = collect()
+            second = collect()
+            self.assertEqual(
+                {tuple(inputs.shape) for inputs, _targets in first},
+                {(2, 1, 3, 1, 1), (2, 2, 3, 1, 1)},
+            )
+            self.assertTrue(all(
+                torch.equal(left, right)
+                for left_batch, right_batch in zip(first, second, strict=True)
+                for left, right in zip(left_batch, right_batch, strict=True)
+            ))
+            expected = {
+                (1.0, 0.0): (10,),
+                (0.0, 1.0): (20, 30),
+                (1.0, 1.0): (40,),
+                (0.0, 0.0): (50, 60),
+            }
+            observed = {}
+            for inputs, targets in first:
+                for bag_inputs, target in zip(inputs, targets, strict=True):
+                    observed[tuple(target.tolist())] = tuple(
+                        round(float(value) * 255)
+                        for value in bag_inputs[:, 0, 0, 0]
+                    )
+            self.assertEqual(observed, expected)
+
     def test_bundle_training_uses_real_patches_and_writes_checkpoint(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 
 from .model_registry import create_resnet18, resolve_device
 from .training_input_bundle import TrainingInputBundle
-from .training_patch_dataset import TrainingPatchDataset
+from .training_patch_dataset import EqualShapeBatchSampler, TrainingPatchDataset
 from .training_protocol import (
     ProgressMessage,
     TerminalMessage,
@@ -41,6 +41,37 @@ class TrainingWorkerError(RuntimeError):
 
 
 _CHECKPOINT_FORMAT = "wafer_defect_studio.resnet18.v2"
+
+
+def create_training_data_loader(
+    dataset: TrainingPatchDataset,
+    config: TrainingConfig,
+    *,
+    split: str,
+) -> DataLoader:
+    """Create the worker loader while keeping v2 Patch Bag shapes separate."""
+
+    shape_keys = dataset.bag_shape_keys
+    if shape_keys is not None:
+        return DataLoader(
+            dataset,
+            batch_sampler=EqualShapeBatchSampler(
+                shape_keys,
+                batch_size=config.batch_size,
+                seed=config.seed,
+                shuffle=split == "train",
+            ),
+            num_workers=0,
+        )
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(config.seed)
+    return DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        shuffle=split == "train",
+        generator=generator,
+        num_workers=0,
+    )
 
 
 @dataclass(slots=True)
@@ -153,21 +184,18 @@ def run_worker(
                 raise RuntimeError("training input bundle does not match the requested snapshot/split")
             if len(bundle.class_codes) != config.class_count:
                 raise RuntimeError("training input bundle class count does not match the request")
-            sample_sizes = {(sample.width, sample.height) for sample in bundle.samples}
-            if len(sample_sizes) != 1:
-                raise RuntimeError(
-                    "training input bundle contains variable sample sizes; "
-                    "a fixed model input rectangle is required"
-                )
+            if bundle.version == 1:
+                sample_sizes = {(sample.width, sample.height) for sample in bundle.samples}
+                if len(sample_sizes) != 1:
+                    raise RuntimeError(
+                        "training input bundle contains variable sample sizes; "
+                        "a fixed model input rectangle is required"
+                    )
             dataset = TrainingPatchDataset(bundle, "train")
-            generator = torch.Generator(device="cpu")
-            generator.manual_seed(config.seed)
-            loader = DataLoader(
+            loader = create_training_data_loader(
                 dataset,
-                batch_size=config.batch_size,
-                shuffle=True,
-                generator=generator,
-                num_workers=0,
+                config,
+                split="train",
             )
         model = create_resnet18(
             config.class_count,
@@ -501,6 +529,7 @@ def _sha256(path: Path) -> str:
 
 
 __all__ = [
+    "create_training_data_loader",
     "TrainingWorkerError",
     "TrainingWorkerHandle",
     "run_worker",
