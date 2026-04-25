@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from pathlib import Path
+from typing import Iterator, Sequence
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 from .training_augmentation import AugmentationConfig, apply_augmentation
 from .training_dataset import extract_model_patch
@@ -17,6 +19,54 @@ from .wafer_view import _decode_wafer_image
 
 class TrainingPatchDatasetError(ValueError):
     """Raised when a bundled source cannot produce a model patch."""
+
+
+class EqualShapeBatchSampler(Sampler[list[int]]):
+    """Yield deterministic batches whose Patch Bag tensor shapes are identical."""
+
+    def __init__(
+        self,
+        shape_keys: Sequence[tuple[int, ...]],
+        *,
+        batch_size: int,
+        seed: int,
+        shuffle: bool,
+    ) -> None:
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise TrainingPatchDatasetError("batch_size must be a positive integer")
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise TrainingPatchDatasetError("seed must be an integer")
+        if not isinstance(shuffle, bool):
+            raise TrainingPatchDatasetError("shuffle must be boolean")
+        self._shape_keys = tuple(shape_keys)
+        self._batch_size = batch_size
+        self._seed = seed
+        self._shuffle = shuffle
+
+    def __iter__(self) -> Iterator[list[int]]:
+        if self._shuffle:
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(self._seed)
+            order = torch.randperm(len(self._shape_keys), generator=generator).tolist()
+        else:
+            order = list(range(len(self._shape_keys)))
+        pending: dict[tuple[int, ...], list[int]] = {}
+        for index in order:
+            bucket = pending.setdefault(self._shape_keys[index], [])
+            bucket.append(index)
+            if len(bucket) == self._batch_size:
+                yield bucket
+                pending[self._shape_keys[index]] = []
+        for bucket in pending.values():
+            if bucket:
+                yield bucket
+
+    def __len__(self) -> int:
+        counts = Counter(self._shape_keys)
+        return sum(
+            (count + self._batch_size - 1) // self._batch_size
+            for count in counts.values()
+        )
 
 
 class TrainingPatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
@@ -133,4 +183,8 @@ class TrainingPatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         return pixels
 
 
-__all__ = ["TrainingPatchDataset", "TrainingPatchDatasetError"]
+__all__ = [
+    "EqualShapeBatchSampler",
+    "TrainingPatchDataset",
+    "TrainingPatchDatasetError",
+]
