@@ -8,9 +8,12 @@ from pathlib import Path
 
 from .dataset_snapshot import DatasetSnapshot, SnapshotSample, load_dataset_snapshot
 from .dataset_split import DatasetSplit, load_dataset_split
+from .detection_windows import Rect
 from .image_asset import SourceHealth, load_image_assets
 from .normalization import NormalizationBounds
 from .project import ProjectError, open_project
+from .training_dataset import enumerate_model_patch_rects
+from .training_protocol import TrainingConfig
 
 
 class TrainingInputBundleError(ProjectError):
@@ -27,6 +30,16 @@ class TrainingBundleSource:
 
 
 @dataclass(frozen=True)
+class TrainingPatchBag:
+    bag_id: str
+    image_asset_id: str
+    row: int
+    column: int
+    patches: tuple[Rect, ...]
+    class_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TrainingInputBundle:
     snapshot_id: str
     split_id: str
@@ -34,21 +47,53 @@ class TrainingInputBundle:
     normalization_bounds: tuple[NormalizationBounds, ...]
     sources: tuple[TrainingBundleSource, ...]
     samples: tuple[SnapshotSample, ...]
+    version: int = 1
+    patch_bags: tuple[TrainingPatchBag, ...] = ()
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+        value = {
+            "snapshot_id": self.snapshot_id,
+            "split_id": self.split_id,
+            "class_codes": self.class_codes,
+            "normalization_bounds": tuple(asdict(item) for item in self.normalization_bounds),
+            "sources": tuple(asdict(item) for item in self.sources),
+        }
+        if self.version == 1:
+            value["samples"] = tuple(asdict(item) for item in self.samples)
+        elif self.version == 2:
+            value["version"] = 2
+            value["patch_bags"] = tuple(
+                {
+                    "bag_id": bag.bag_id,
+                    "image_asset_id": bag.image_asset_id,
+                    "row": bag.row,
+                    "column": bag.column,
+                    "patches": tuple(
+                        {
+                            "x": rect.x,
+                            "y": rect.y,
+                            "width": rect.width,
+                            "height": rect.height,
+                        }
+                        for rect in bag.patches
+                    ),
+                    "class_codes": bag.class_codes,
+                }
+                for bag in self.patch_bags
+            )
+        else:
+            raise TrainingInputBundleError(f"Unsupported Training Input Bundle version: {self.version}")
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
     @classmethod
     def from_json(cls, serialized: str) -> "TrainingInputBundle":
         try:
             value = json.loads(serialized)
-            return cls(
-                value["snapshot_id"],
-                value["split_id"],
-                tuple(value["class_codes"]),
-                tuple(NormalizationBounds(**item) for item in value["normalization_bounds"]),
-                tuple(TrainingBundleSource(**item) for item in value["sources"]),
-                tuple(
+            version = value.get("version", 1)
+            samples = ()
+            patch_bags = ()
+            if version == 1:
+                samples = tuple(
                     SnapshotSample(
                         item["image_asset_id"],
                         item["row"],
@@ -60,7 +105,35 @@ class TrainingInputBundle:
                         tuple(item["class_codes"]),
                     )
                     for item in value["samples"]
-                ),
+                )
+            elif version == 2:
+                patch_bags = tuple(
+                    TrainingPatchBag(
+                        item["bag_id"],
+                        item["image_asset_id"],
+                        item["row"],
+                        item["column"],
+                        tuple(
+                            Rect(rect["x"], rect["y"], rect["width"], rect["height"])
+                            for rect in item["patches"]
+                        ),
+                        tuple(item["class_codes"]),
+                    )
+                    for item in value["patch_bags"]
+                )
+            else:
+                raise TrainingInputBundleError(
+                    f"Unsupported Training Input Bundle version: {version}"
+                )
+            return cls(
+                value["snapshot_id"],
+                value["split_id"],
+                tuple(value["class_codes"]),
+                tuple(NormalizationBounds(**item) for item in value["normalization_bounds"]),
+                tuple(TrainingBundleSource(**item) for item in value["sources"]),
+                samples,
+                version,
+                patch_bags,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise TrainingInputBundleError("Invalid Training Input Bundle") from error
@@ -71,6 +144,8 @@ def create_training_input_bundle(
     snapshot_id: str,
     split_id: str,
     destination: str | Path,
+    *,
+    config: TrainingConfig | None = None,
 ) -> TrainingInputBundle:
     """Write one deterministic worker bundle after validating source identity."""
 
@@ -84,6 +159,12 @@ def create_training_input_bundle(
     if not snapshot.samples:
         raise TrainingInputBundleError(
             f"Dataset Snapshot {snapshot_id} has no frozen training samples"
+        )
+    if config is not None and (
+        config.snapshot_id != snapshot_id or config.split_id != split_id
+    ):
+        raise TrainingInputBundleError(
+            "Training Config does not match the requested Dataset Snapshot/Split"
         )
 
     split_by_image = _split_assignments(split)
@@ -123,14 +204,41 @@ def create_training_input_bundle(
     )
     if len(samples) != len(snapshot.samples):
         raise TrainingInputBundleError("Snapshot sample source inventory is incomplete")
-    bundle = TrainingInputBundle(
-        snapshot.snapshot_id,
-        split.split_id,
-        tuple(item.code for item in snapshot.classes),
-        snapshot.normalization_bounds,
-        tuple(sources),
-        samples,
-    )
+    class_codes = tuple(item.code for item in snapshot.classes)
+    if config is None:
+        bundle = TrainingInputBundle(
+            snapshot.snapshot_id,
+            split.split_id,
+            class_codes,
+            snapshot.normalization_bounds,
+            tuple(sources),
+            samples,
+        )
+    else:
+        patch_bags = tuple(
+            TrainingPatchBag(
+                f"{sample.image_asset_id}:{sample.row}:{sample.column}",
+                sample.image_asset_id,
+                sample.row,
+                sample.column,
+                enumerate_model_patch_rects(
+                    Rect(sample.x, sample.y, sample.width, sample.height),
+                    config,
+                ),
+                sample.class_codes,
+            )
+            for sample in samples
+        )
+        bundle = TrainingInputBundle(
+            snapshot.snapshot_id,
+            split.split_id,
+            class_codes,
+            snapshot.normalization_bounds,
+            tuple(sources),
+            (),
+            2,
+            patch_bags,
+        )
     output = Path(destination).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(bundle.to_json() + "\n", encoding="utf-8")
@@ -157,5 +265,6 @@ __all__ = [
     "TrainingBundleSource",
     "TrainingInputBundle",
     "TrainingInputBundleError",
+    "TrainingPatchBag",
     "create_training_input_bundle",
 ]

@@ -20,6 +20,7 @@ from wafer_defect_studio.training_input_bundle import (
     TrainingInputBundleError,
     create_training_input_bundle,
 )
+from wafer_defect_studio.training_protocol import TrainingConfig
 from wafer_defect_studio.training_scope import TrainingScope
 
 
@@ -35,26 +36,63 @@ class TrainingInputBundleTest(unittest.TestCase):
             snapshot = DatasetSnapshot(
                 "snapshot-1",
                 "2026-01-01T00:00:00+00:00",
-                TrainingScope(("line-a",), ("scratch",)),
-                (DefectClass("scratch", "Scratch", "#cc4444"),),
+                TrainingScope(("line-a",), ("scratch", "particle")),
+                (
+                    DefectClass("scratch", "Scratch", "#cc4444"),
+                    DefectClass("particle", "Particle", "#4488cc"),
+                ),
                 (SnapshotSource("wafer-1", "line-a", _fingerprint(source)),),
                 (),
                 (),
                 (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
                 SamplingPolicy(1.0),
-                (SnapshotSample("wafer-1", 0, 0, 0, 0, 2, 2, ("scratch",)),),
+                (
+                    SnapshotSample("wafer-1", 0, 0, 10, 20, 2, 2, ("scratch", "particle")),
+                    SnapshotSample("wafer-1", 0, 1, 12, 20, 2, 2, ()),
+                ),
             )
             split = DatasetSplit("split-1", "snapshot-1", 7, ("wafer-1",), (), ())
             _insert_snapshot_and_split(project_path, snapshot, split)
 
             destination = root / "bundle.json"
             created = create_training_input_bundle(
-                project_path, "snapshot-1", "split-1", destination
+                project_path,
+                "snapshot-1",
+                "split-1",
+                destination,
+                config=TrainingConfig(
+                    snapshot_id="snapshot-1",
+                    split_id="split-1",
+                    class_count=2,
+                    epochs=1,
+                    batch_size=1,
+                    patch_size=1,
+                    patch_stride=1,
+                ),
             )
             self.assertEqual(TrainingInputBundle.from_json(destination.read_text()), created)
-            self.assertEqual(created.class_codes, ("scratch",))
+            self.assertEqual(created.class_codes, ("scratch", "particle"))
             self.assertEqual(created.sources[0].split, "train")
-            self.assertEqual(json.loads(destination.read_text())["samples"][0]["x"], 0)
+            self.assertEqual(created.version, 2)
+            self.assertEqual(created.samples, ())
+            self.assertEqual(
+                tuple(bag.class_codes for bag in created.patch_bags),
+                (("scratch", "particle"), ()),
+            )
+            self.assertEqual(created.patch_bags[0].bag_id, "wafer-1:0:0")
+            self.assertEqual(created.patch_bags[1].bag_id, "wafer-1:0:1")
+            self.assertEqual(
+                tuple(created.patch_bags[0].patches),
+                ((10, 20, 1, 1), (11, 20, 1, 1), (10, 21, 1, 1), (11, 21, 1, 1)),
+            )
+            payload = json.loads(destination.read_text())
+            self.assertNotIn("samples", payload)
+            self.assertNotIn("class_codes", payload["patch_bags"][0]["patches"][0])
+            self.assertTrue(
+                {"split", "fingerprint", "path"}.isdisjoint(payload["patch_bags"][0])
+            )
+            self.assertEqual(payload["sources"][0]["split"], "train")
+            self.assertEqual(payload["sources"][0]["fingerprint"], _fingerprint(source))
 
     def test_bundle_rejects_legacy_snapshot_without_frozen_samples(self):
         with TemporaryDirectory() as temporary:
