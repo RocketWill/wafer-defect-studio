@@ -12,6 +12,7 @@ import torch
 
 from wafer_defect_studio.dataset_snapshot import SnapshotSample
 from wafer_defect_studio.detection_windows import Rect
+from wafer_defect_studio.model_registry import create_resnet18
 from wafer_defect_studio.normalization import NormalizationBounds
 from wafer_defect_studio.training_protocol import (
     ProgressMessage,
@@ -35,6 +36,91 @@ from wafer_defect_studio.training_patch_dataset import TrainingPatchDataset
 
 
 class TrainingWorkerTest(unittest.TestCase):
+    def test_v2_bundle_training_pools_patch_logits_per_bag(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "bags.png"
+            image = QImage(64, 32, QImage.Format.Format_Grayscale8)
+            bits = image.bits()
+            stride = image.bytesPerLine()
+            for row in range(32):
+                bits[row * stride : (row + 1) * stride] = bytes(range(64))
+            self.assertTrue(image.save(str(source), "PNG"))
+            del bits, image
+            bundle = TrainingInputBundle(
+                "snapshot-1",
+                "split-1",
+                ("scratch", "particle"),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                (TrainingBundleSource("wafer-1", "train", str(source), _hash(source), "uint8"),),
+                (),
+                2,
+                (
+                    TrainingPatchBag(
+                        "bag-0",
+                        "wafer-1",
+                        0,
+                        0,
+                        (Rect(0, 0, 32, 32), Rect(32, 0, 32, 32)),
+                        ("scratch",),
+                    ),
+                    TrainingPatchBag(
+                        "bag-1",
+                        "wafer-1",
+                        0,
+                        1,
+                        (Rect(0, 0, 32, 32), Rect(32, 0, 32, 32)),
+                        ("particle",),
+                    ),
+                ),
+            )
+            bundle_path = root / "training_input_bundle.json"
+            bundle_path.write_text(bundle.to_json(), encoding="utf-8")
+            request = TrainingRequest(
+                request_id="patch-bag-worker-test",
+                config=TrainingConfig(
+                    snapshot_id="snapshot-1",
+                    split_id="split-1",
+                    class_count=2,
+                    epochs=1,
+                    batch_size=2,
+                    device="cpu",
+                    seed=23,
+                    learning_rate=0.01,
+                    patch_size=32,
+                    patch_stride=32,
+                ),
+                artifact_staging_path=root / "staging",
+                input_bundle_path=bundle_path,
+            )
+            torch.manual_seed(23)
+            output = queue.Queue()
+
+            run_worker(request, output, threading.Event())
+
+            messages = []
+            while True:
+                message = decode_message(output.get_nowait())
+                messages.append(message)
+                if isinstance(message, TerminalMessage):
+                    break
+            self.assertEqual(messages[-1].status, "completed")
+            progress = [item for item in messages if isinstance(item, ProgressMessage)]
+            self.assertEqual([(item.step, item.total_steps) for item in progress], [(1, 1)])
+            checkpoint = torch.load(
+                root / "staging" / "model.pt",
+                map_location="cpu",
+                weights_only=True,
+            )
+            torch.manual_seed(23)
+            initial_model = create_resnet18(2, weights="none", device="cpu")
+            self.assertFalse(
+                torch.equal(
+                    checkpoint["state_dict"]["backbone.fc.weight"],
+                    initial_model.state_dict()["backbone.fc.weight"],
+                )
+            )
+
     def test_v2_loader_batches_equal_shapes_with_repeatable_membership(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

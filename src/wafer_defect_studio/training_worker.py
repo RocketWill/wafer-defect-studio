@@ -247,10 +247,22 @@ def run_worker(
 
                 optimizer.zero_grad(set_to_none=True)
                 if loader is not None:
-                    model.train() if inputs.shape[0] > 1 else model.eval()
+                    effective_batch_size = (
+                        inputs.shape[0] * inputs.shape[1]
+                        if inputs.ndim == 5
+                        else inputs.shape[0]
+                    )
+                    model.train() if effective_batch_size > 1 else model.eval()
                     inputs = inputs.to(device)
                     targets = targets.to(device)
-                logits = model(inputs)
+                if inputs.ndim == 5:
+                    batch_size, patch_count, channels, height, width = inputs.shape
+                    patch_logits = model(
+                        inputs.reshape(batch_size * patch_count, channels, height, width)
+                    ).reshape(batch_size, patch_count, config.class_count)
+                    logits = max_pool_patch_logits(patch_logits)
+                else:
+                    logits = model(inputs)
                 loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
                 loss.backward()
                 optimizer.step()
@@ -419,8 +431,16 @@ def _write_staged_artifacts(
         ),
         "input_size": (
             {
-                "width": bundle.samples[0].width,
-                "height": bundle.samples[0].height,
+                "width": (
+                    bundle.patch_bags[0].patches[0].width
+                    if bundle.version == 2
+                    else bundle.samples[0].width
+                ),
+                "height": (
+                    bundle.patch_bags[0].patches[0].height
+                    if bundle.version == 2
+                    else bundle.samples[0].height
+                ),
             }
             if bundle is not None
             else {"width": 32, "height": 32}
