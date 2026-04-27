@@ -40,7 +40,8 @@ class TrainingWorkerError(RuntimeError):
     """Raised when a worker request cannot be started or validated."""
 
 
-_CHECKPOINT_FORMAT = "wafer_defect_studio.resnet18.v2"
+_CHECKPOINT_FORMAT_V2 = "wafer_defect_studio.resnet18.v2"
+_CHECKPOINT_FORMAT_V3 = "wafer_defect_studio.resnet18.v3"
 
 
 def max_pool_patch_logits(patch_logits: Tensor) -> Tensor:
@@ -196,6 +197,17 @@ def run_worker(
                     raise RuntimeError(
                         "training input bundle contains variable sample sizes; "
                         "a fixed model input rectangle is required"
+                    )
+            else:
+                if config.patch_size is None or config.patch_stride is None:
+                    raise RuntimeError("Patch Bag training requires configured patch geometry")
+                if any(
+                    rect.width != config.patch_size or rect.height != config.patch_size
+                    for bag in bundle.patch_bags
+                    for rect in bag.patches
+                ):
+                    raise RuntimeError(
+                        "Patch Bag descriptors do not match the configured patch_size"
                     )
             dataset = TrainingPatchDataset(bundle, "train")
             loader = create_training_data_loader(
@@ -419,7 +431,11 @@ def _write_staged_artifacts(
     bundle: TrainingInputBundle | None = None,
 ) -> None:
     checkpoint = {
-        "checkpoint_format": _CHECKPOINT_FORMAT,
+        "checkpoint_format": (
+            _CHECKPOINT_FORMAT_V3
+            if bundle is not None and bundle.version == 2
+            else _CHECKPOINT_FORMAT_V2
+        ),
         "architecture": "resnet18",
         "feature_stride": 16,
         "class_count": config.class_count,
@@ -454,6 +470,14 @@ def _write_staged_artifacts(
             for name, value in model.state_dict().items()
         },
     }
+    if bundle is not None and bundle.version == 2:
+        checkpoint.update(
+            {
+                "patch_size": config.patch_size,
+                "patch_stride": config.patch_stride,
+                "bag_pooling": "max",
+            }
+        )
     model_path = staging / "model.pt"
     metrics_path = staging / "metrics.json"
     manifest_path = staging / "manifest.json"

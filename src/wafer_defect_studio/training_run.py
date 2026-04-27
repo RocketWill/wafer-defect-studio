@@ -50,6 +50,7 @@ _OOM_ERROR_CODES = {"out_of_memory", "oom"}
 _CHECKPOINT_NAME = "model.pt"
 _CHECKPOINT_FORMAT_V1 = "wafer_defect_studio.resnet18.v1"
 _CHECKPOINT_FORMAT_V2 = "wafer_defect_studio.resnet18.v2"
+_CHECKPOINT_FORMAT_V3 = "wafer_defect_studio.resnet18.v3"
 _IMMUTABLE_COLUMNS = (
     "run_id",
     "created_at",
@@ -509,10 +510,27 @@ def validate_project_checkpoint(
         raise TrainingRunError(
             f"project checkpoint metadata is incomplete: {', '.join(sorted(missing))}"
         )
-    if value["checkpoint_format"] not in {_CHECKPOINT_FORMAT_V1, _CHECKPOINT_FORMAT_V2}:
+    if value["checkpoint_format"] not in {
+        _CHECKPOINT_FORMAT_V1,
+        _CHECKPOINT_FORMAT_V2,
+        _CHECKPOINT_FORMAT_V3,
+    }:
         raise TrainingRunError("unsupported project checkpoint format")
-    if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V2 and value.get("feature_stride") != 16:
-        raise TrainingRunError("resnet18.v2 checkpoint feature_stride must be 16")
+    if value["checkpoint_format"] in {_CHECKPOINT_FORMAT_V2, _CHECKPOINT_FORMAT_V3}:
+        if value.get("feature_stride") != 16:
+            version = value["checkpoint_format"].rsplit(".", 1)[-1]
+            raise TrainingRunError(f"resnet18.{version} checkpoint feature_stride must be 16")
+    if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V3:
+        for name in ("patch_size", "patch_stride"):
+            item = value.get(name)
+            if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+                raise TrainingRunError(f"resnet18.v3 checkpoint {name} must be a positive integer")
+        if value["patch_stride"] > value["patch_size"]:
+            raise TrainingRunError(
+                "resnet18.v3 checkpoint patch_stride cannot exceed patch_size"
+            )
+        if value.get("bag_pooling") != "max":
+            raise TrainingRunError("resnet18.v3 checkpoint bag_pooling must be max")
     if value["architecture"] != "resnet18":
         raise TrainingRunError("project checkpoint architecture must be resnet18")
     class_codes = value["class_codes"]

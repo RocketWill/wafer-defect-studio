@@ -112,6 +112,22 @@ class TrainingWorkerTest(unittest.TestCase):
                 map_location="cpu",
                 weights_only=True,
             )
+            self.assertEqual(
+                {
+                    "checkpoint_format": checkpoint["checkpoint_format"],
+                    "feature_stride": checkpoint["feature_stride"],
+                    "patch_size": checkpoint["patch_size"],
+                    "patch_stride": checkpoint["patch_stride"],
+                    "bag_pooling": checkpoint["bag_pooling"],
+                },
+                {
+                    "checkpoint_format": "wafer_defect_studio.resnet18.v3",
+                    "feature_stride": 16,
+                    "patch_size": 32,
+                    "patch_stride": 32,
+                    "bag_pooling": "max",
+                },
+            )
             torch.manual_seed(23)
             initial_model = create_resnet18(2, weights="none", device="cpu")
             self.assertFalse(

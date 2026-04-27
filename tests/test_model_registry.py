@@ -116,6 +116,51 @@ class ModelRegistryTest(unittest.TestCase):
                 hook.remove()
             self.assertEqual(features, [torch.Size((4, 4))])
 
+            v3_path = Path(temporary_directory) / "model-v3.pt"
+            torch.save(
+                {
+                    **checkpoint,
+                    "checkpoint_format": "wafer_defect_studio.resnet18.v3",
+                    "feature_stride": 16,
+                    "patch_size": 128,
+                    "patch_stride": 64,
+                    "bag_pooling": "max",
+                },
+                v3_path,
+            )
+            loaded_v3, loaded_v3_checkpoint = load_project_checkpoint(v3_path, device="cpu")
+            self.assertEqual(loaded_v3.feature_stride, 16)
+            self.assertEqual(loaded_v3_checkpoint["patch_size"], 128)
+            self.assertTrue(
+                all(
+                    torch.equal(value, loaded_v3.state_dict()[name])
+                    for name, value in checkpoint["state_dict"].items()
+                )
+            )
+
+            for field, value, message in (
+                ("patch_size", None, "patch_size"),
+                ("patch_stride", 0, "patch_stride"),
+                ("patch_stride", 129, "patch_stride cannot exceed patch_size"),
+                ("bag_pooling", "mean", "bag_pooling must be max"),
+            ):
+                invalid_v3 = {
+                    **checkpoint,
+                    "checkpoint_format": "wafer_defect_studio.resnet18.v3",
+                    "feature_stride": 16,
+                    "patch_size": 128,
+                    "patch_stride": 64,
+                    "bag_pooling": "max",
+                }
+                if value is None:
+                    invalid_v3.pop(field)
+                else:
+                    invalid_v3[field] = value
+                invalid_v3_path = Path(temporary_directory) / f"invalid-v3-{field}-{value}.pt"
+                torch.save(invalid_v3, invalid_v3_path)
+                with self.assertRaisesRegex(ModelRegistryError, message):
+                    load_project_checkpoint(invalid_v3_path, device="cpu")
+
             for feature_stride in (None, 32):
                 invalid_path = Path(temporary_directory) / f"invalid-{feature_stride}.pt"
                 invalid = {
