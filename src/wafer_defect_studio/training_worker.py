@@ -23,7 +23,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 
-from .model_registry import create_resnet18, resolve_device
+from .model_registry import create_resnet18, max_pool_patch_logits, resolve_device
 from .training_input_bundle import TrainingInputBundle
 from .training_patch_dataset import EqualShapeBatchSampler, TrainingPatchDataset
 from .training_protocol import (
@@ -42,12 +42,6 @@ class TrainingWorkerError(RuntimeError):
 
 _CHECKPOINT_FORMAT_V2 = "wafer_defect_studio.resnet18.v2"
 _CHECKPOINT_FORMAT_V3 = "wafer_defect_studio.resnet18.v3"
-
-
-def max_pool_patch_logits(patch_logits: Tensor) -> Tensor:
-    """Return one raw logit per bag and class by maximizing over patches."""
-
-    return patch_logits.max(dim=1).values
 
 
 def create_training_data_loader(

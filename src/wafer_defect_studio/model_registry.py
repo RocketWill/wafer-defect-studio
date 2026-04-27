@@ -73,6 +73,12 @@ def duplicate_grayscale_channels(inputs: Tensor) -> Tensor:
     raise ModelRegistryError("ResNet18 accepts one grayscale or three-channel input channels")
 
 
+def max_pool_patch_logits(patch_logits: Tensor) -> Tensor:
+    """Return one raw logit per bag and class by maximizing over patches."""
+
+    return patch_logits.max(dim=1).values
+
+
 class ResNet18Classifier(nn.Module):
     """Torchvision ResNet18 with a multi-label logits head."""
 
@@ -290,6 +296,7 @@ __all__ = [
     "create_resnet18",
     "duplicate_grayscale_channels",
     "load_project_checkpoint",
+    "max_pool_patch_logits",
     "resnet18_local_probabilities",
     "resolve_device",
 ]

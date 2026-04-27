@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .model_registry import load_project_checkpoint
+from .model_registry import load_project_checkpoint, max_pool_patch_logits
 from .training_input_bundle import TrainingInputBundle, TrainingInputBundleError
 from .training_patch_dataset import TrainingPatchDataset
 
@@ -51,24 +51,43 @@ def score_training_bundle(
         )
     except ValueError as error:
         raise ModelScoringError(str(error)) from error
+    is_patch_bag_checkpoint = checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v3"
     input_size = checkpoint["input_size"]
-    sizes = {(sample.width, sample.height) for sample in bundle.samples}
-    if sizes != {(input_size["width"], input_size["height"])}:
-        raise ModelScoringError("bundle sample size does not match checkpoint input_size")
+    if is_patch_bag_checkpoint:
+        if bundle.version != 2:
+            raise ModelScoringError("resnet18.v3 checkpoint requires a Patch Bag bundle")
+        if any(
+            rect.width != checkpoint["patch_size"] or rect.height != checkpoint["patch_size"]
+            for bag in bundle.patch_bags
+            for rect in bag.patches
+        ):
+            raise ModelScoringError("Patch Bag descriptors do not match checkpoint patch_size")
+    else:
+        sizes = {(sample.width, sample.height) for sample in bundle.samples}
+        if sizes != {(input_size["width"], input_size["height"])}:
+            raise ModelScoringError("bundle sample size does not match checkpoint input_size")
     try:
         dataset = TrainingPatchDataset(bundle, split)
     except ValueError as error:
         raise ModelScoringError(str(error)) from error
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     resolved_device = next(model.parameters()).device
     true_batches: list[np.ndarray] = []
     score_batches: list[np.ndarray] = []
     model.eval()
     with torch.no_grad():
-        for inputs, targets in loader:
-            logits = model(inputs.to(resolved_device))
-            true_batches.append(targets.cpu().numpy())
-            score_batches.append(torch.sigmoid(logits).cpu().numpy())
+        if is_patch_bag_checkpoint:
+            for index in range(len(dataset)):
+                inputs, target = dataset[index]
+                patch_logits = model(inputs.to(resolved_device)).unsqueeze(0)
+                logits = max_pool_patch_logits(patch_logits)
+                true_batches.append(target.unsqueeze(0).numpy())
+                score_batches.append(torch.sigmoid(logits).cpu().numpy())
+        else:
+            loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+            for inputs, targets in loader:
+                logits = model(inputs.to(resolved_device))
+                true_batches.append(targets.cpu().numpy())
+                score_batches.append(torch.sigmoid(logits).cpu().numpy())
     return ModelScores(
         tuple(checkpoint["class_codes"]),
         np.concatenate(true_batches, axis=0),
