@@ -43,6 +43,12 @@ class TrainingWorkerError(RuntimeError):
 _CHECKPOINT_FORMAT = "wafer_defect_studio.resnet18.v2"
 
 
+def max_pool_patch_logits(patch_logits: Tensor) -> Tensor:
+    """Return one raw logit per bag and class by maximizing over patches."""
+
+    return patch_logits.max(dim=1).values
+
+
 def create_training_data_loader(
     dataset: TrainingPatchDataset,
     config: TrainingConfig,
@@ -530,6 +536,7 @@ def _sha256(path: Path) -> str:
 
 __all__ = [
     "create_training_data_loader",
+    "max_pool_patch_logits",
     "TrainingWorkerError",
     "TrainingWorkerHandle",
     "run_worker",
