@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QLabel, QPushButton, QSpinBox
 
 from wafer_defect_studio import image_asset, project
 from wafer_defect_studio.annotation import GridAnnotation, save_grid_annotation
@@ -26,6 +26,8 @@ from wafer_defect_studio.image_grid_placement import set_image_grid_origin
 from wafer_defect_studio.main_window import MainWindow
 from wafer_defect_studio.review import mark_image_reviewed
 from wafer_defect_studio.training_protocol import TerminalMessage
+from wafer_defect_studio.training_input_bundle import TrainingInputBundle
+from wafer_defect_studio.training_run import load_training_run
 from wafer_defect_studio.training_scope import DataGroup, assign_image_to_data_group, save_data_groups
 
 
@@ -68,11 +70,31 @@ class ProjectTrainingRunTest(unittest.TestCase):
                 window.workspace_actions["Train"].trigger()
                 app.processEvents()
 
+                window.findChild(QComboBox, "trainingModelModeComboBox").setCurrentText(
+                    "Patch Classification v3"
+                )
+                window.findChild(QSpinBox, "trainingPatchSizeSpinBox").setValue(1)
+                window.findChild(QSpinBox, "trainingPatchStrideSpinBox").setValue(1)
                 start = window.findChild(QPushButton, "startTrainingButton")
                 start.click()
                 self.assertEqual(len(started), 1)
                 request = started[0]
                 self.assertEqual(request.config.snapshot_id, _snapshot_id)
+                self.assertEqual((request.config.patch_size, request.config.patch_stride), (1, 1))
+                persisted = load_training_run(project_path, request.request_id)
+                self.assertEqual(
+                    (
+                        persisted.config.patch_size,
+                        persisted.config.patch_stride,
+                        persisted.config.bag_pooling,
+                    ),
+                    (1, 1, "max"),
+                )
+                bundle = TrainingInputBundle.from_json(
+                    Path(request.input_bundle_path).read_text(encoding="utf-8")
+                )
+                self.assertEqual(bundle.version, 2)
+                self.assertTrue(bundle.patch_bags)
                 self.assertTrue(request.config.split_id)
                 self.assertEqual(_training_status(project_path, request.request_id), "running")
 

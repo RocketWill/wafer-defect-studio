@@ -647,6 +647,7 @@ class MainWindow(QMainWindow):
             self._training_input_controls.split_combo,
             self._training_configuration_controls.device_combo,
             self._training_configuration_controls.weights_combo,
+            self._training_configuration_controls.model_mode_combo,
         ):
             widget.currentIndexChanged.connect(self._on_training_context_changed)
         for widget in (
@@ -654,6 +655,8 @@ class MainWindow(QMainWindow):
             self._training_configuration_controls.batch_size_spin,
             self._training_configuration_controls.learning_rate_spin,
             self._training_configuration_controls.seed_spin,
+            self._training_configuration_controls.patch_size_spin,
+            self._training_configuration_controls.patch_stride_spin,
         ):
             widget.valueChanged.connect(self._on_training_context_changed)
         training_workspace = QWidget(self)
@@ -1103,6 +1106,9 @@ class MainWindow(QMainWindow):
             "seed": config.seed_spin.value(),
             "device": config.device_combo.currentText(),
             "weightsPolicy": config.weights_combo.currentText(),
+            "modelMode": config.model_mode_combo.currentData(),
+            "patchSize": config.patch_size_spin.value(),
+            "patchStride": config.patch_stride_spin.value(),
         }
         for field, value in values.items():
             self._settings.setValue(self._training_context_key(project_info, field), value)
@@ -1152,6 +1158,8 @@ class MainWindow(QMainWindow):
                 (config.batch_size_spin, "batchSize", int),
                 (config.learning_rate_spin, "learningRate", float),
                 (config.seed_spin, "seed", int),
+                (config.patch_size_spin, "patchSize", int),
+                (config.patch_stride_spin, "patchStride", int),
             ):
                 value = self._settings.value(
                     self._training_context_key(project_info, field), None
@@ -1172,6 +1180,15 @@ class MainWindow(QMainWindow):
                 index = widget.findText(value)
                 if index >= 0:
                     widget.setCurrentIndex(index)
+            mode = str(
+                self._settings.value(
+                    self._training_context_key(project_info, "modelMode"), "cam_v2"
+                )
+                or "cam_v2"
+            )
+            index = config.model_mode_combo.findData(mode)
+            if index >= 0:
+                config.model_mode_combo.setCurrentIndex(index)
         finally:
             self._training_context_restoring = previous_restoring
 
@@ -1692,6 +1709,11 @@ class MainWindow(QMainWindow):
                 seed=request.config.seed,
                 learning_rate=request.config.learning_rate,
                 weights_policy=request.config.weights_policy,
+                patch_size=request.config.patch_size,
+                patch_stride=request.config.patch_stride,
+                bag_pooling=(
+                    "max" if request.config.patch_size is not None else None
+                ),
             )
             run = create_training_run(project_path, run_config, run_id=run_id)
             update_training_run_terminal(
@@ -1704,6 +1726,7 @@ class MainWindow(QMainWindow):
                     request.config.snapshot_id,
                     request.config.split_id,
                     bundle_path,
+                    config=request.config,
                 )
             except Exception as error:
                 update_training_run_terminal(

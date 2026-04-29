@@ -48,6 +48,23 @@ class TrainingConfigurationControls(QWidget):
         self.weights_combo = QComboBox(self)
         self.weights_combo.setObjectName("trainingWeightsPolicyComboBox")
         self.weights_combo.addItems(("none", "imagenet"))
+        self.model_mode_combo = QComboBox(self)
+        self.model_mode_combo.setObjectName("trainingModelModeComboBox")
+        self.model_mode_combo.addItem("CAM v2", "cam_v2")
+        self.model_mode_combo.addItem("Patch Classification v3", "patch_v3")
+        self.patch_size_spin = QSpinBox(self)
+        self.patch_size_spin.setObjectName("trainingPatchSizeSpinBox")
+        self.patch_size_spin.setRange(1, 100000)
+        self.patch_size_spin.setValue(128)
+        self.patch_stride_spin = QSpinBox(self)
+        self.patch_stride_spin.setObjectName("trainingPatchStrideSpinBox")
+        self.patch_stride_spin.setRange(1, 100000)
+        self.patch_stride_spin.setValue(64)
+        self.bag_pooling_label = QLabel("max", self)
+        self.bag_pooling_label.setObjectName("trainingBagPoolingLabel")
+        self.request_summary_label = QLabel(self)
+        self.request_summary_label.setObjectName("trainingRequestSummaryLabel")
+        self.request_summary_label.setWordWrap(True)
         self.context_status_label = QLabel("Training context ready.", self)
         self.context_status_label.setObjectName("trainingContextStatusLabel")
         self.context_status_label.setWordWrap(True)
@@ -59,7 +76,36 @@ class TrainingConfigurationControls(QWidget):
         layout.addRow("Seed", self.seed_spin)
         layout.addRow("Device", self.device_combo)
         layout.addRow("Weights policy", self.weights_combo)
+        layout.addRow("Model mode", self.model_mode_combo)
+        layout.addRow("Model Patch size", self.patch_size_spin)
+        layout.addRow("Model Patch stride", self.patch_stride_spin)
+        layout.addRow("Bag pooling", self.bag_pooling_label)
+        layout.addRow("Request summary", self.request_summary_label)
         layout.addRow(self.context_status_label)
+        self.model_mode_combo.currentIndexChanged.connect(self._sync_patch_controls)
+        self.patch_size_spin.valueChanged.connect(self._update_request_summary)
+        self.patch_stride_spin.valueChanged.connect(self._update_request_summary)
+        self._sync_patch_controls()
+
+    def _sync_patch_controls(self) -> None:
+        visible = self.model_mode_combo.currentData() == "patch_v3"
+        layout = self.layout()
+        for widget in (self.patch_size_spin, self.patch_stride_spin, self.bag_pooling_label):
+            widget.setVisible(visible)
+            label = layout.labelForField(widget)
+            if label is not None:
+                label.setVisible(visible)
+        self._update_request_summary()
+
+    def _update_request_summary(self) -> None:
+        if self.model_mode_combo.currentData() == "patch_v3":
+            self.request_summary_label.setText(
+                "Patch Classification v3 | "
+                f"Model Patch: {self.patch_size_spin.value()}x{self.patch_size_spin.value()} | "
+                f"stride: {self.patch_stride_spin.value()} | bag pooling: max"
+            )
+        else:
+            self.request_summary_label.setText("CAM v2 | legacy Grid sample training")
 
     def set_context_status(self, message: str, ready: bool) -> None:
         self.context_status_label.setText(message)
@@ -80,6 +126,7 @@ class TrainingConfigurationControls(QWidget):
         if split.snapshot_id != snapshot.identifier:
             raise TrainingConfigurationError("Split does not belong to selected Snapshot")
         try:
+            patch_mode = self.model_mode_combo.currentData() == "patch_v3"
             config = TrainingConfig(
                 snapshot_id=snapshot.identifier,
                 split_id=split.identifier,
@@ -91,6 +138,8 @@ class TrainingConfigurationControls(QWidget):
                 seed=self.seed_spin.value(),
                 learning_rate=self.learning_rate_spin.value(),
                 weights_policy=self.weights_combo.currentText(),
+                patch_size=self.patch_size_spin.value() if patch_mode else None,
+                patch_stride=self.patch_stride_spin.value() if patch_mode else None,
             )
             return TrainingRequest(request_id, config, artifact_staging_path)
         except (TrainingProtocolError, TypeError, ValueError) as error:

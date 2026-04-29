@@ -81,6 +81,9 @@ class RunConfig:
     learning_rate: float = 0.001
     seed: int = 0
     weights_policy: str = "none"
+    patch_size: int | None = None
+    patch_stride: int | None = None
+    bag_pooling: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("snapshot_id", "split_id", "architecture", "device", "weights_policy"):
@@ -101,6 +104,18 @@ class RunConfig:
             raise TrainingRunError("learning_rate must be a positive number")
         _json_mapping(self.augmentation, "augmentation")
         object.__setattr__(self, "augmentation", dict(self.augmentation))
+        patch_values = (self.patch_size, self.patch_stride, self.bag_pooling)
+        if any(value is not None for value in patch_values):
+            if self.patch_size is None or self.patch_stride is None:
+                raise TrainingRunError(
+                    "patch_size and patch_stride must be provided together"
+                )
+            _require_positive_int(self.patch_size, "patch_size")
+            _require_positive_int(self.patch_stride, "patch_stride")
+            if self.patch_stride > self.patch_size:
+                raise TrainingRunError("patch_stride cannot exceed patch_size")
+            if self.bag_pooling != "max":
+                raise TrainingRunError("bag_pooling must be max for Patch Classification")
 
     @property
     def model_config(self) -> dict[str, Any]:
@@ -110,6 +125,9 @@ class RunConfig:
             "architecture": self.architecture,
             "class_count": self.class_count,
             "weights_policy": self.weights_policy,
+            "patch_size": self.patch_size,
+            "patch_stride": self.patch_stride,
+            "bag_pooling": self.bag_pooling,
         }
 
     @property

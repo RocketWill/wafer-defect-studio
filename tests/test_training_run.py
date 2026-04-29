@@ -36,6 +36,38 @@ from wafer_defect_studio.training_run import (
 
 
 class TrainingRunTest(unittest.TestCase):
+    def test_run_config_requires_complete_patch_classification_geometry(self):
+        legacy = RunConfig("snapshot-1", "split-1")
+        self.assertEqual(
+            (legacy.patch_size, legacy.patch_stride, legacy.bag_pooling),
+            (None, None, None),
+        )
+        patch_config = RunConfig(
+            "snapshot-1",
+            "split-1",
+            patch_size=128,
+            patch_stride=64,
+            bag_pooling="max",
+        )
+        self.assertEqual(
+            (patch_config.patch_size, patch_config.patch_stride, patch_config.bag_pooling),
+            (128, 64, "max"),
+        )
+        for values, message in (
+            ({"patch_size": 128}, "provided together"),
+            ({"patch_size": 128, "patch_stride": 64}, "bag_pooling must be max"),
+            (
+                {"patch_size": 128, "patch_stride": 129, "bag_pooling": "max"},
+                "patch_stride cannot exceed patch_size",
+            ),
+            (
+                {"patch_size": 128, "patch_stride": 64, "bag_pooling": "mean"},
+                "bag_pooling must be max",
+            ),
+        ):
+            with self.assertRaisesRegex(TrainingRunError, message):
+                RunConfig("snapshot-1", "split-1", **values)
+
     def test_project_checkpoint_contract_rejects_incomplete_preprocessing(self):
         with TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "model.pt"
