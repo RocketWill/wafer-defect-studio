@@ -388,6 +388,7 @@ def run_detection_worker(
         device = _resolve_device(request_value.device)
         checkpoint_model = None
         checkpoint = None
+        is_patch_checkpoint = False
         bounds_by_dtype: dict[str, NormalizationBounds] = {}
         if request_value.checkpoint_path is not None:
             checkpoint_model, checkpoint = load_project_checkpoint(
@@ -404,6 +405,20 @@ def run_detection_worker(
                 raise DetectionWorkerError(
                     f"checkpoint has no normalization bounds for {request_value.source.dtype}"
                 )
+            is_patch_checkpoint = (
+                checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v3"
+            )
+            if is_patch_checkpoint:
+                expected_window = (checkpoint["patch_size"], checkpoint["patch_size"])
+                expected_stride = (checkpoint["patch_stride"], checkpoint["patch_stride"])
+                if request_value.window_size != expected_window:
+                    raise DetectionWorkerError(
+                        "Detection Profile window_size does not match checkpoint patch_size"
+                    )
+                if request_value.stride != expected_stride:
+                    raise DetectionWorkerError(
+                        "Detection Profile stride does not match checkpoint patch_stride"
+                    )
         if checkpoint_model is not None:
             bounds = bounds_by_dtype[str(request_value.source.dtype)]
             local_maps: list[np.ndarray] = []
@@ -444,12 +459,17 @@ def run_detection_worker(
                     ]
                 ).to(device)
                 with torch.no_grad():
-                    local_maps.append(
-                        resnet18_local_probabilities(checkpoint_model, normalized)
-                        .detach()
-                        .cpu()
-                        .numpy()
-                    )
+                    if is_patch_checkpoint:
+                        local_maps.append(
+                            torch.sigmoid(checkpoint_model(normalized)).detach().cpu().numpy()
+                        )
+                    else:
+                        local_maps.append(
+                            resnet18_local_probabilities(checkpoint_model, normalized)
+                            .detach()
+                            .cpu()
+                            .numpy()
+                        )
             map_values = np.concatenate(local_maps, axis=0)
         else:
             patches = np.empty(

@@ -206,7 +206,7 @@ def generate_all_convolutional_artifact(
     profile_id: str | None = None,
     evaluation_id: str | None = None,
 ) -> CamDetectionArtifact:
-    """Stitch trained all-convolutional sigmoid maps without renormalizing them."""
+    """Stitch trained sigmoid maps or scalar patch scores without renormalizing."""
 
     resolved_windows = tuple(windows)
     if not resolved_windows or any(not isinstance(window, Window) for window in resolved_windows):
@@ -216,15 +216,20 @@ def generate_all_convolutional_artifact(
     _positive_integer("source_width", width)
     _positive_integer("source_height", height)
     values = _activation_array(local_probabilities)
+    scalar_patch_scores = values.ndim == 2
     if values.ndim == 3:
         values = values[None, ...]
-    if values.ndim != 4 or values.shape[0] != len(resolved_windows):
-        raise ValueError("local_probabilities must have shape (windows, height, width, classes)")
-    window_height, window_width = resolved_windows[0].height, resolved_windows[0].width
-    if values.shape[1:3] != (window_height, window_width):
-        raise ValueError("local_probabilities spatial dimensions must match the model window")
-    if any((window.height, window.width) != (window_height, window_width) for window in resolved_windows):
-        raise ValueError("all windows must have equal model dimensions")
+    if values.ndim not in (2, 4) or values.shape[0] != len(resolved_windows):
+        raise ValueError(
+            "local_probabilities must have shape (windows, classes) or "
+            "(windows, height, width, classes)"
+        )
+    if not scalar_patch_scores:
+        window_height, window_width = resolved_windows[0].height, resolved_windows[0].width
+        if values.shape[1:3] != (window_height, window_width):
+            raise ValueError("local_probabilities spatial dimensions must match the model window")
+        if any((window.height, window.width) != (window_height, window_width) for window in resolved_windows):
+            raise ValueError("all windows must have equal model dimensions")
     if not np.all(np.isfinite(values)) or not np.all((values >= 0.0) & (values <= 1.0)):
         raise ValueError("local_probabilities must contain finite sigmoid values from 0 to 1")
     names = _class_names(class_names, int(values.shape[-1]))
@@ -237,9 +242,14 @@ def generate_all_convolutional_artifact(
         center_weight=str((window_settings or {}).get("center_weighting", "linear")),
     )
     metadata = _provenance(provenance, model_id, profile_id, evaluation_id)
-    metadata["map_method"] = "all_convolutional_sigmoid"
+    map_method = (
+        "patch_classification_sigmoid"
+        if scalar_patch_scores
+        else "all_convolutional_sigmoid"
+    )
+    metadata["map_method"] = map_method
     settings = _window_settings(window_settings, resolved_windows)
-    settings["map_method"] = "all_convolutional_sigmoid"
+    settings["map_method"] = map_method
     return CamDetectionArtifact(
         maps=stitched.confidence.copy(),
         coverage=stitched.coverage.copy(),

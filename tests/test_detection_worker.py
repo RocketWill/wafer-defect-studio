@@ -6,6 +6,7 @@ import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -23,6 +24,111 @@ from wafer_defect_studio.model_registry import create_resnet18
 
 
 class DetectionWorkerTest(unittest.TestCase):
+    def test_v3_patch_detection_is_batch_invariant_and_stitches_scalar_scores(self):
+        class PatchScorer(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+
+            def forward(self, inputs):
+                value = inputs[:, 0, 0, 0]
+                return torch.stack((2.0 * value, -2.0 * value), dim=1)
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = np.zeros((4, 6), dtype=np.uint8)
+            source[:, 2:] = 255
+            checkpoint = {
+                "checkpoint_format": "wafer_defect_studio.resnet18.v3",
+                "class_codes": ["scratch", "particle"],
+                "normalization_bounds": [
+                    {
+                        "dtype": "uint8",
+                        "source_min": 0,
+                        "source_max": 255,
+                        "low": 0.0,
+                        "high": 255.0,
+                        "low_percentile": 1.0,
+                        "high_percentile": 99.0,
+                    }
+                ],
+                "input_size": {"width": 4, "height": 4},
+                "patch_size": 4,
+                "patch_stride": 2,
+                "bag_pooling": "max",
+            }
+
+            def run(batch_size):
+                staging = root / f"batch-{batch_size}"
+                request = DetectionRequest(
+                    request_id=f"v3-batch-{batch_size}",
+                    source=source,
+                    run_id="run-v3",
+                    profile_id="profile-v3",
+                    approved_evaluation_id="evaluation-v3",
+                    class_names=("scratch", "particle"),
+                    window_size=(4, 4),
+                    stride=(2, 2),
+                    center_weighting="uniform",
+                    staging_path=staging,
+                    checkpoint_path=root / "model.pt",
+                    model_id="patch-model",
+                    batch_size=batch_size,
+                )
+                output = queue.Queue()
+                with patch(
+                    "wafer_defect_studio.detection_worker.load_project_checkpoint",
+                    return_value=(PatchScorer(), checkpoint),
+                ):
+                    run_detection_worker(request, output, threading.Event())
+                terminal = None
+                while terminal is None:
+                    message = decode_message(output.get_nowait())
+                    if isinstance(message, DetectionTerminal):
+                        terminal = message
+                self.assertEqual(terminal.status, "completed", terminal.message)
+                return json.loads((staging / "maps.json").read_text(encoding="utf-8"))
+
+            one = run(1)
+            four = run(4)
+            self.assertEqual(one["maps"], four["maps"])
+            self.assertEqual(one["coverage"], four["coverage"])
+            self.assertEqual(one["class_names"], ["scratch", "particle"])
+            self.assertEqual(one["window_settings"]["map_method"], "patch_classification_sigmoid")
+            probabilities = torch.sigmoid(torch.tensor((2.0, -2.0))).tolist()
+            np.testing.assert_allclose(one["maps"][0][0], (0.5, 0.5))
+            np.testing.assert_allclose(
+                one["maps"][0][2],
+                tuple((0.5 + value) / 2.0 for value in probabilities),
+            )
+            np.testing.assert_allclose(one["maps"][0][5], probabilities)
+
+            mismatched = DetectionRequest(
+                request_id="v3-mismatched-stride",
+                source=source,
+                run_id="run-v3",
+                profile_id="profile-v3",
+                class_names=("scratch", "particle"),
+                window_size=(4, 4),
+                stride=(1, 1),
+                staging_path=root / "mismatched",
+                checkpoint_path=root / "model.pt",
+            )
+            output = queue.Queue()
+            with patch(
+                "wafer_defect_studio.detection_worker.load_project_checkpoint",
+                return_value=(PatchScorer(), checkpoint),
+            ):
+                run_detection_worker(mismatched, output, threading.Event())
+            terminal = None
+            while terminal is None:
+                message = decode_message(output.get_nowait())
+                if isinstance(message, DetectionTerminal):
+                    terminal = message
+            self.assertEqual(terminal.status, "failed")
+            self.assertIn("stride does not match", terminal.message)
+            self.assertFalse((root / "mismatched" / "manifest.json").exists())
+
     def test_checkpoint_detection_stages_all_convolutional_sigmoid_maps(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
