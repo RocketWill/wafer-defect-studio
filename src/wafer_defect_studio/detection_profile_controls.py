@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from .evaluation_run import load_evaluation, load_evaluation_decisions
 from .project import _EVALUATION_SCHEMA_VERSION, open_project
+from .training_run import load_training_run
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +31,8 @@ class DetectionProfileEvaluationOption:
     identifier: str
     label: str
     available: bool = True
+    required_window_size: tuple[int, int] | None = None
+    required_stride: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +94,25 @@ def load_detection_profile_evaluation_inventory(
                 )
             )
         else:
+            training = load_training_run(info.path, evaluation.training_run_id)
+            required_window = None
+            required_stride = None
+            if training.config.patch_size is not None:
+                required_window = (
+                    training.config.patch_size,
+                    training.config.patch_size,
+                )
+                required_stride = (
+                    training.config.patch_stride,
+                    training.config.patch_stride,
+                )
             options.append(
                 DetectionProfileEvaluationOption(
                     evaluation_id,
                     f"Approved Evaluation {evaluation.evaluation_id} — Training Run {evaluation.training_run_id}",
+                    True,
+                    required_window,
+                    required_stride,
                 )
             )
     options.sort(key=lambda option: (not option.available, option.identifier))
@@ -141,7 +160,15 @@ class DetectionProfileControls(QWidget):
         layout.addRow(self.status_label)
 
         self._create_callback: ProfileCreateCallback | None = None
-        self.evaluation_combo.currentIndexChanged.connect(self._refresh_gate)
+        self._inventory_status = "No Approved Evaluations available."
+        self.evaluation_combo.currentIndexChanged.connect(self._evaluation_changed)
+        for spin in (
+            self.window_width_spin,
+            self.window_height_spin,
+            self.stride_x_spin,
+            self.stride_y_spin,
+        ):
+            spin.valueChanged.connect(self._refresh_gate)
         self.create_button.clicked.connect(self._create)
         self._refresh_gate()
 
@@ -164,23 +191,63 @@ class DetectionProfileControls(QWidget):
     def set_inventory(self, inventory: DetectionProfileEvaluationInventory) -> None:
         """Display deterministic Approved/Unavailable Evaluation choices."""
 
+        self._inventory_status = inventory.status
         self.evaluation_combo.clear()
         for option in inventory.options:
             self.evaluation_combo.addItem(option.label, option.identifier)
+            self.evaluation_combo.setItemData(
+                self.evaluation_combo.count() - 1,
+                option,
+                Qt.UserRole + 1,
+            )
             item = self.evaluation_combo.model().item(self.evaluation_combo.count() - 1)
             if item is not None:
                 item.setEnabled(option.available)
-        self.status_label.setText(inventory.status)
+        self._evaluation_changed()
+
+    def _evaluation_changed(self, *_args: object) -> None:
+        option = self.evaluation_combo.itemData(
+            self.evaluation_combo.currentIndex(), Qt.UserRole + 1
+        )
+        if (
+            isinstance(option, DetectionProfileEvaluationOption)
+            and option.required_window_size is not None
+            and option.required_stride is not None
+        ):
+            self.window_width_spin.setValue(option.required_window_size[0])
+            self.window_height_spin.setValue(option.required_window_size[1])
+            self.stride_x_spin.setValue(option.required_stride[0])
+            self.stride_y_spin.setValue(option.required_stride[1])
         self._refresh_gate()
 
     def _refresh_gate(self, *_args: object) -> None:
         index = self.evaluation_combo.currentIndex()
         item = self.evaluation_combo.model().item(index) if index >= 0 else None
+        option = self.evaluation_combo.itemData(index, Qt.UserRole + 1) if index >= 0 else None
+        geometry_matches = True
+        if (
+            isinstance(option, DetectionProfileEvaluationOption)
+            and option.required_window_size is not None
+            and option.required_stride is not None
+        ):
+            geometry_matches = (
+                self.window_width_spin.value(),
+                self.window_height_spin.value(),
+            ) == option.required_window_size and (
+                self.stride_x_spin.value(),
+                self.stride_y_spin.value(),
+            ) == option.required_stride
+        self.status_label.setText(
+            self._inventory_status
+            if geometry_matches
+            else "Detection Profile geometry must match Patch Classification checkpoint settings."
+        )
         self.create_button.setEnabled(
             self._create_callback is not None
             and bool(self.evaluation_combo.currentData())
             and item is not None
             and item.isEnabled()
+            and geometry_matches
         )
 
     def _create(self) -> None:
