@@ -1,22 +1,22 @@
 {
-  "split_id": "34cd48b95c3dc16773b8d1ed5f080786b151070777808c9183b3da60e6e526bb",
+  "split_id": "e589a4ff319cca8a267ffb6a227d21b9996b9ca8967ea6656781d4d0489a1f6f",
   "models": {
     "cam_v2": {
-      "split_id": "34cd48b95c3dc16773b8d1ed5f080786b151070777808c9183b3da60e6e526bb",
+      "split_id": "e589a4ff319cca8a267ffb6a227d21b9996b9ca8967ea6656781d4d0489a1f6f",
       "checkpoint_version": "wafer_defect_studio.resnet18.v2",
       "runtime_seconds": {
-        "train": 33.35900000005495,
-        "evaluation": 12.047000000020489,
-        "detection": 196.4529999999795
+        "train": 33.54700000002049,
+        "evaluation": 12.625,
+        "detection": 196.4220000000205
       },
       "grid_evaluation": {
         "split": "test",
         "per_class": {
           "scratch": {
-            "tp": 0,
-            "fp": 0,
-            "fn": 2,
-            "f1": 0.0
+            "tp": 1,
+            "fp": 2,
+            "fn": 1,
+            "f1": 0.4
           },
           "particle": {
             "tp": 4,
@@ -26,9 +26,9 @@
           }
         },
         "exact_grid_match": {
-          "count": 16,
+          "count": 15,
           "total": 18,
-          "rate": 0.8888888888888888
+          "rate": 0.8333333333333334
         }
       },
       "coarse_localization": {
@@ -63,8 +63,8 @@
       },
       "evidence_status": "measured",
       "thresholds_from_validation": {
-        "scratch": 0.26717546582221985,
-        "particle": 0.39611873030662537
+        "scratch": 0.156180277466774,
+        "particle": 0.4055728614330292
       },
       "evaluation_id": "demo-cam_v2-evaluation",
       "detection_request_ids": [
@@ -75,49 +75,49 @@
       ]
     },
     "patch_v3": {
-      "split_id": "34cd48b95c3dc16773b8d1ed5f080786b151070777808c9183b3da60e6e526bb",
+      "split_id": "e589a4ff319cca8a267ffb6a227d21b9996b9ca8967ea6656781d4d0489a1f6f",
       "checkpoint_version": "wafer_defect_studio.resnet18.v3",
       "runtime_seconds": {
-        "train": 94.23499999998603,
-        "evaluation": 12.562000000034459,
-        "detection": 238.0779999999795
+        "train": 93.46899999992456,
+        "evaluation": 12.656000000075437,
+        "detection": 241.95300000009593
       },
       "grid_evaluation": {
         "split": "test",
         "per_class": {
           "scratch": {
             "tp": 1,
-            "fp": 0,
+            "fp": 7,
             "fn": 1,
-            "f1": 0.6666666666666666
+            "f1": 0.2
           },
           "particle": {
-            "tp": 2,
+            "tp": 3,
             "fp": 0,
-            "fn": 2,
-            "f1": 0.6666666666666666
+            "fn": 1,
+            "f1": 0.8571428571428571
           }
         },
         "exact_grid_match": {
-          "count": 15,
+          "count": 10,
           "total": 18,
-          "rate": 0.8333333333333334
+          "rate": 0.5555555555555556
         }
       },
       "coarse_localization": {
         "per_class": {
           "scratch": {
-            "asserted_grid_intersections": 1,
+            "asserted_grid_intersections": 0,
             "asserted_grids": 4,
-            "intersection_rate": 0.25,
-            "normal_grid_leaks": 0,
+            "intersection_rate": 0.0,
+            "normal_grid_leaks": 10,
             "normal_grids": 32,
-            "normal_grid_leak_rate": 0.0
+            "normal_grid_leak_rate": 0.3125
           },
           "particle": {
-            "asserted_grid_intersections": 0,
+            "asserted_grid_intersections": 2,
             "asserted_grids": 8,
-            "intersection_rate": 0.0,
+            "intersection_rate": 0.25,
             "normal_grid_leaks": 0,
             "normal_grids": 28,
             "normal_grid_leak_rate": 0.0
@@ -136,8 +136,8 @@
       },
       "evidence_status": "measured",
       "thresholds_from_validation": {
-        "scratch": 0.8065810203552246,
-        "particle": 0.9794095158576965
+        "scratch": 0.07152186334133148,
+        "particle": 0.8905737400054932
       },
       "evaluation_id": "demo-patch_v3-evaluation",
       "detection_request_ids": [
@@ -157,7 +157,7 @@
   ],
   "source_kind": "realistic",
   "generated_demo_data": true,
-  "snapshot_id": "57da0b21-ae2b-4c12-adee-bc10da92bb95",
+  "snapshot_id": "764b87ca-42ec-40fc-9132-ac5aca847c9c",
   "corpus": {
     "images": 20,
     "train": 16,

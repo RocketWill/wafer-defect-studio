@@ -401,6 +401,7 @@ def main() -> int:
                     split_id,
                     realistic_corpus,
                     Path(temporary),
+                    output,
                     app,
                 )
                 (output / "demo-summary.json").write_text(
@@ -903,6 +904,7 @@ def _run_matched_gpu_comparison(
     split_id: str,
     realistic_corpus,
     root: Path,
+    output: Path,
     app: QApplication,
 ) -> dict[str, object]:
     split = load_dataset_split(project_path, split_id)
@@ -934,6 +936,16 @@ def _run_matched_gpu_comparison(
             model_mode=mode,
         )
         train_seconds = time.monotonic() - started
+        _capture(
+            window,
+            output
+            / (
+                "04-cam-v2-training.png"
+                if mode == "cam_v2"
+                else "06-patch-v3-training.png"
+            ),
+            app,
+        )
 
         started = time.monotonic()
         evaluation, grid_evaluation = _run_evaluation(
@@ -946,6 +958,18 @@ def _run_matched_gpu_comparison(
             evaluation_id=f"demo-{mode}-evaluation",
         )
         evaluation_seconds = time.monotonic() - started
+        window.workspace_actions["Evaluate"].trigger()
+        window.configure_evaluation(evaluation)
+        _capture(
+            window,
+            output
+            / (
+                "05-cam-v2-grid-evaluation.png"
+                if mode == "cam_v2"
+                else "07-patch-v3-grid-evaluation.png"
+            ),
+            app,
+        )
         thresholds = calibrated_profile_thresholds(
             {"thresholds": evaluation.thresholds}, ("scratch", "particle")
         )
@@ -1020,6 +1044,34 @@ def _run_matched_gpu_comparison(
         evidence = compute_grid_quality_evidence(
             ("scratch", "particle"), grid_evaluation, rows
         )
+        if patch_mode:
+            window.workspace_actions["Detect"].trigger()
+            window.set_detection_artifact(artifact)
+            window._detection_controls.class_selector.setCurrentText("scratch")
+            window._detection_controls.region_mode_combo.setCurrentText("Both")
+            _capture(window, output / "08-patch-v3-confidence-map.png", app)
+            source_image = QImage(str(current.path))
+            export_proposals_png(
+                output / "09-patch-v3-heatmap-export.png",
+                source_image,
+                (),
+                selected_class="scratch",
+                confidence_map=artifact.class_map("scratch"),
+                region_mask=regions["scratch"],
+                region_opacity=0.7,
+                grid_rects=tuple(
+                    (grid.x, grid.y, grid.width, grid.height)
+                    for grid in annotation_grids(
+                        source_image.width(),
+                        source_image.height(),
+                        grid_profile.cell_width,
+                        grid_profile.cell_height,
+                        0,
+                        0,
+                    )
+                ),
+                overwrite=True,
+            )
         checkpoint = validate_project_checkpoint(training.artifact_path / "model.pt")
         report = {
             "checkpoint_version": checkpoint["checkpoint_format"],

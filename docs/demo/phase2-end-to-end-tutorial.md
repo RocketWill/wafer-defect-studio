@@ -1,14 +1,13 @@
 # Phase 2 MVP 端到端 Demo
 
-這份教學走過 Phase 2 MVP 的主要 happy path：匯入圖片、建立兩類標註、建立
-Dataset Snapshot、以真實 frozen patch 訓練 ResNet18、用同一個 checkpoint
-評估並核准、執行 checkpoint-backed Detection，最後顯示 Heatmap、Regions
-與 Both。推薦使用本 repo 附帶的 generated 20MP wafer source；它是合理的
-demo 視覺素材，不是真實量測資料，也不構成模型準確率證據。
+這份教學走過既有 happy path，並重跑 Ticket 29 的 matched comparison：Grid
+Annotation → Patch Bag training → Grid Evaluation → dense patch Defect Confidence
+Map → Review／Export。CAM v2 remains the default; Patch Classification v3 is
+optional.
 
 ## 執行 Demo
 
-在 repository root 執行 GPU realistic-source Demo：
+在 repository root 執行 realistic-source GPU Demo：
 
 ```powershell
 $env:QT_QPA_PLATFORM = "offscreen"
@@ -18,83 +17,114 @@ $env:QT_QPA_FONTDIR = "C:/Windows/Fonts"
   --output .\docs\demo\screenshots\realistic-20mp
 ```
 
-程式會在暫存目錄建立 project，不會修改既有專案；截圖、heatmap 與摘要會寫
-入 [`docs/demo/screenshots/realistic-20mp/`](screenshots/realistic-20mp/)。
-20MP 輸入是 4,472×4,472（19,998,784 pixels）；為避免現有 JSON map artifact
-在 Demo 中產生數百 MB 序列化負擔，runner 會使用 1,536×1,536 processing
-geometry 建立十張 deterministic generated wafer bases，並在 summary 保留輸入
-尺寸。這些 bases 不是輸入圖的重複註冊；train、validation、test 按 Wafer Image
-隔離。realistic source 會要求 CUDA。
+程式在暫存目錄建立 project，不修改既有專案。realistic source 要求 CUDA；
+若 CUDA 不可用會明確失敗。4,472×4,472（19,998,784 pixels）輸入是生成並放大
+的尺寸參考，不是真實量測資料；runner 以 1,536×1,536 processing geometry
+建立 20 張彼此不同的 deterministic generated Wafer Images。
 
-若只要快速驗證 UI 串接，也可以省略 `--source-image` 使用小型 synthetic source：
+20 images; image-level split 16/2/2。train、validation、test 都以 Wafer Image
+隔離，CAM v2 與 Patch Classification v3 使用相同 `split_id`。scratch 與
+particle 在 validation/test 各有 2 張 independent asserted-image support。
+threshold 由 validation 產生；以下 Grid Evaluation 只讀 test，沒有用 test
+調參。
+
+若只要快速驗證 UI 串接，可省略 `--source-image` 使用小型 synthetic source：
 
 ```powershell
 & 'E:\miniconda3\envs\wafer-defect-studio\python.exe' docs/demo/run_phase2_demo.py `
   --output .\artifacts\phase2-demo-synthetic
 ```
 
-## 每一階段看什麼
+這個快速分支只走 CAM v2 UI flow，不是 20-image matched quality comparison。
 
-| 階段 | 輸出 | 驗收重點 |
+## 工作流程
+
+1. 匯入 Wafer Images，套用 512 px Grid Profile 與 Effective Wafer Area。
+2. 以既有多標籤 Grid Annotation 寫入 `scratch`／`particle` truth，完成 Reviewed。
+3. 建立 immutable Dataset Snapshot 與 image-level Dataset Split。
+4. CAM v2 維持原本一個 Annotation Grid 對一個 classifier input 的契約。
+5. 選擇 Patch Classification v3 時，每個 Annotation Grid 建立一個 Patch Bag；
+   bag 內是 ordered source-coordinate Model Patches，positive truth 只存在 bag，
+   不會虛構 individual patch label。
+6. v3 scorer 對 Model Patches 產生 logits，以 per-class max pooling 得到 Grid
+   logits，再沿用 Grid Evaluation、threshold 與 approval workflow。
+7. Approved v3 run 以 dense patch scores 經既有 overlap stitcher 產生同一種
+   source-coordinate Defect Confidence Map。
+8. Proposal、Review、Proposal-to-Grid conversion 及 CSV／JSON／PNG Export 沿用
+   既有契約，沒有 patch-specific schema。
+
+Patch geometry: 128 px size, 64 px stride, max pooling. Checkpoint v1／v2 仍以
+原 CAM semantics 載入；v3 checkpoint 是
+`wafer_defect_studio.resnet18.v3`，並明載上述 geometry 與 pooling rule。
+
+## 截圖與 machine-readable evidence
+
+| 階段 | 輸出 | 證據範圍 |
 | --- | --- | --- |
-| 1. 匯入 | [`01-import.png`](screenshots/realistic-20mp/01-import.png) | 1,536×1,536 processing proxy、512px Grid Profile 與 Effective Area；summary 另記 4,472×4,472 原圖。 |
-| 2. 兩類標註 | [`02-annotation-two-classes.png`](screenshots/realistic-20mp/02-annotation-two-classes.png) | Annotate workspace 顯示 `scratch`、`particle` 兩個 class，並以 Grid Annotation 寫入 Reviewed truth。 |
-| 3. Dataset Snapshot | [`03-dataset-snapshot.png`](screenshots/realistic-20mp/03-dataset-snapshot.png) | Snapshot 與 deterministic split 已建立，Training scope 顯示 `demo-line`。 |
-| 4. 訓練 | [`04-training-complete.png`](screenshots/realistic-20mp/04-training-complete.png) | Train workspace 顯示 ResNet18、CUDA、20 epochs、`Status: Completed`。 |
-| 5. 評估與核准 | [`05-evaluation-approved.png`](screenshots/realistic-20mp/05-evaluation-approved.png) | Evaluate workspace 顯示 Macro F1、thresholds，以及 Candidate → Validated → Approved decision history。 |
-| 6. Detection | [`06-detection-controls.png`](screenshots/realistic-20mp/06-detection-controls.png) | Approved Evaluation、Detection Profile、Detection Run 與 source-pixel map context 已接上。 |
-| 7. Heatmap | [`06-heatmap.png`](screenshots/realistic-20mp/06-heatmap.png) | Detect canvas 的 1,536×1,536 class confidence map；另有 [`06-heatmap-export.png`](screenshots/realistic-20mp/06-heatmap-export.png) PNG export。 |
-| 8. Regions | [`07-regions.png`](screenshots/realistic-20mp/07-regions.png) | 使用 0.5 high-confidence display floor 後，顯示局部 retained region；仍是 approximate localization，不是 segmentation mask。 |
-| 9. Both | [`08-both.png`](screenshots/realistic-20mp/08-both.png) | Heatmap 與 retained regions 疊加，使用相同 profile、threshold 與 opacity。 |
-| 10. 標註比對 | [`demo-summary.json`](screenshots/realistic-20mp/demo-summary.json) | 把 Detection Proposals 映射回 participating Annotation Grid，計算 per-class TP/FP/FN、precision/recall/F1 與 exact-cell match。 |
+| 1. 匯入 | [`01-import.png`](screenshots/realistic-20mp/01-import.png) | final run 的 1,536×1,536 processing proxy；summary 記錄 20-image corpus。 |
+| 2. 兩類標註 | [`02-annotation-two-classes.png`](screenshots/realistic-20mp/02-annotation-two-classes.png) | `scratch`、`particle` Grid Annotation 與 Reviewed truth。 |
+| 3. Dataset Snapshot | [`03-dataset-snapshot.png`](screenshots/realistic-20mp/03-dataset-snapshot.png) | final run 的 Snapshot／split UI。 |
+| 4. CAM v2 訓練 | [`04-cam-v2-training.png`](screenshots/realistic-20mp/04-cam-v2-training.png) | 同一 matched run 的 CAM v2 completed Training Run。 |
+| 5. CAM v2 Grid Evaluation | [`05-cam-v2-grid-evaluation.png`](screenshots/realistic-20mp/05-cam-v2-grid-evaluation.png) | test-only v2 per-class metrics。 |
+| 6. Patch v3 訓練 | [`06-patch-v3-training.png`](screenshots/realistic-20mp/06-patch-v3-training.png) | v3、128/64/max immutable request summary。 |
+| 7. Patch v3 Grid Evaluation | [`07-patch-v3-grid-evaluation.png`](screenshots/realistic-20mp/07-patch-v3-grid-evaluation.png) | test-only v3 per-class metrics。 |
+| 8. Patch v3 map | [`08-patch-v3-confidence-map.png`](screenshots/realistic-20mp/08-patch-v3-confidence-map.png) | direct Detection worker 的單張 `evidence-patch_v3-test-1` artifact 經 value-only confidence viewer 顯示；不是 persisted Profile/Run 畫面。 |
+| 9. Patch v3 export | [`09-patch-v3-heatmap-export.png`](screenshots/realistic-20mp/09-patch-v3-heatmap-export.png) | v3 同一 source-coordinate map 的 native-size PNG export。 |
+| 10. Matched comparison | [`demo-summary.json`](screenshots/realistic-20mp/demo-summary.json) | 2026-05-04 最新重跑的完整 v2/v3 measured record。 |
 
-完整的 machine-readable 結果在
-[`realistic-20mp/demo-summary.json`](screenshots/realistic-20mp/demo-summary.json)。
-本次實測摘要為 ResNet18 / CUDA / 20 epochs、checkpoint format
-`wafer_defect_studio.resnet18.v2`（feature stride 16）、兩類順序
-`scratch → particle`、Detection
-map method `all_convolutional_sigmoid`、map shape `[1536, 1536, 2]`。Evaluation
-Macro F1 為 `0.5`；annotation comparison Macro F1 為 `0.5152`、exact-cell
-match 為 `2/9`。Scratch 的 Grid comparison 為 TP `1`、FP `1`、FN `0`，但
-held-out Evaluation scratch F1 仍為 `0.0`。這些數字是本次 pipeline evidence，
-重新執行會因新 run/checksum 而更新，不能當成 production accuracy。
+## Matched GPU 結果
 
-## 目前 MVP 的解讀邊界
+硬體為 RTX 3090，兩個模型使用相同 immutable 16/2/2 split；每個 class 的
+validation/test asserted-image support 都是 2/2，`evidence_status` 為
+`measured`。
 
-這個 runner 的目的，是驗證專案資料、服務、worker 和 GUI 的串接，而不是
-宣稱模型已具備真實 wafer 的準確率：
+Test-only Grid Evaluation：
 
-- realistic input 是生成並放大的 20MP grayscale 尺寸參考，不是真實 wafer
-  量測；runner 依其 processing geometry 建立獨立 generated corpus。
-- Demo 會建立 10 個 source images，讓 deterministic split 同時有 train、
-  validation、test。八張 train bases 中七張包含不同位置／角度的 scratch，
-  一張是 scratch hard negative；validation/test 使用未重複的 generated bases。
-  每個 image 的 Grid Annotation 都會真的寫入 SQLite，類別是 `scratch` 與
-  `particle`，並標記 Reviewed。
-- Training worker 讀取 Snapshot-backed `training_input_bundle.json`，以真實
-  ResNet18 訓練並發佈 `model.pt`；runner 會拒絕缺 checkpoint 或 synthetic
-  artifact 的結果。
-- Evaluation worker 從已發佈 checkpoint score test split，再計算實際
-  `y_true`/`y_score` metrics；它不接受 runner 內嵌的受控矩陣。
-- Detection 由 Approved Evaluation 綁定的 checkpoint 產生 layer4+FC
-  1×1 convolution、sigmoid local maps，再用既有 overlap stitcher。runner
-  會拒絕 `map_method` 不是 `all_convolutional_sigmoid` 的 artifact。
-- `annotation_validation` 是實際把 Proposal rectangle 與 participating
-  Annotation Grid 做交集後的比對；本次 `2/9` exact-cell match 與 Macro F1
-  `0.5152` 表示 scratch localization 已縮小，但模型仍未形成可靠的兩類泛化。
-- realistic Demo Profile 使用 Evaluation threshold 的 positive 值，並把
-  Regions/Both 的顯示下限提高到 `0.5`，以避免零 threshold 造成整片 overlay；
-  這是 Demo 可視化門檻，不是 production threshold tuning。
-- Detection/CAM 與 retained regions 是 approximate weak localization。Heatmap
-  與 Regions 都不是 segmentation mask；目前不應把這個 synthetic demo 當成
-  可部署模型品質。
+- v2: scratch F1 0.4000, particle F1 1.0000, exact Grid match 15/18
+- v3: scratch F1 0.2000, particle F1 0.8571, exact Grid match 10/18
 
-要用真實資料驗證，請在應用程式中建立或開啟 project，匯入真實 8/16-bit
-grayscale wafer，完成 Grid/Effective Area/Reviewed 與 Dataset Snapshot，然後
-以相同的 Train → Evaluate → Detect → Review → Export 順序操作。
+Coarse localization 的數字順序是 asserted Grid intersection rate／Normal Grid
+leak rate；它不是 pixel IoU：
+
+- v2: scratch intersection/leak 1.0000/1.0000; particle intersection/leak 1.0000/1.0000
+- v3: scratch intersection/leak 0.0000/0.3125; particle intersection/leak 0.2500/0.0000
+
+本次 measured evidence 沒有建立品質改善：v3 把 particle Normal Grid leakage
+降到 0.0000，但 scratch 仍有 0.3125 leakage；兩類 asserted-Grid intersection、
+scratch／particle Grid F1 與 exact Grid match 都比 v2 低。因此 CAM v2 remains
+the default; Patch Classification v3 is optional. This generated-data comparison
+does not establish segmentation, Neurocle equivalence, or production accuracy.
+
+`demo-summary.json` 也保留兩個 checkpoint version、validation-derived
+thresholds，以及 train／evaluation／detection runtime。這些值是單次本機執行
+證據；重跑會產生新的 run IDs、checksum、thresholds 與 runtime。
+
+Matched GPU runner 不自動建立 approval decision、Detection Profile 或 persisted
+Detection Run；它直接執行 validation/test worker requests 後彙總 evidence。
+Approved v3 的正式 UI routing 由 Slice 29.14 的
+`tests.test_project_detection_profile` 與 `tests.test_project_detection_launch`
+覆蓋。第 08 張只顯示最後一個 test image artifact；跨四張 held-out images 的
+aggregate 數值仍以 summary 為準。
+
+## 解讀邊界
+
+- Grid Annotation 是 weak multi-label truth，不是 pixel mask、polygon 或 box。
+- Patch Bag 只表示每個 asserted Defect Class 至少由一個 Model Patch 支持，
+  不指出是哪一個 patch。
+- Defect Confidence Map 與 retained regions 是 source-coordinate approximate
+  localization，不是 pixel-accurate boundary。
+- Neurocle 公開材料只提供行為參考；本 repo 沒有其專有 architecture、loss、
+  patch policy、weights 或相依套件，也不主張等價。
+- generated corpus 與 processing proxy 只證明 workflow 和 bounded comparison
+  可執行；上線品質仍需獨立真實 wafer corpus 驗證。
+
+要用真實資料驗證，請匯入真實 8/16-bit grayscale Wafer Images，完成 Grid
+Profile、Effective Wafer Area、Grid Annotation、Reviewed 與 Dataset Snapshot，
+再按 Train → Evaluate → Detect → Review → Export 操作。只有滿足專案 criteria
+並由 Algorithm Engineer 明確核准的 run，才可成為 Approved Run。
 
 ## 清理與重跑
 
-Demo 使用 `TemporaryDirectory`，執行結束後暫存 SQLite project 會自動清除；
-只有指定的 screenshots 與 summary 會保留。重新執行會覆寫同名輸出，方便在
-程式或 UI 有變更時更新文件證據。
+Demo 使用 `TemporaryDirectory`，執行結束後暫存 SQLite project 自動清除；只有
+指定 output 目錄的 `01`–`09` screenshots 與 `demo-summary.json` 保留。重跑
+realistic command 會覆寫這組 matched evidence。
