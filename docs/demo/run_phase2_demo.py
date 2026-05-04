@@ -152,7 +152,7 @@ def source_configuration(
     }
 
 
-_REALISTIC_TRAIN_CENTER_GRAYS: tuple[int, ...] = (132, 138, 144, 150, 156, 162, 168, 174)
+_REALISTIC_TRAIN_CENTER_GRAYS: tuple[int, ...] = tuple(range(126, 174, 3))
 _REALISTIC_TRAIN_SCRATCH_CELLS: tuple[tuple[int, int], ...] = (
     (1, 1),
     (1, 0),
@@ -162,6 +162,14 @@ _REALISTIC_TRAIN_SCRATCH_CELLS: tuple[tuple[int, int], ...] = (
     (1, 1),
     (1, 0),
     (1, 1),
+    (2, 2),
+    (1, 2),
+    (2, 0),
+    (1, 1),
+    (2, 1),
+    (1, 0),
+    (2, 2),
+    (1, 2),
 )
 
 
@@ -205,41 +213,50 @@ def build_realistic_corpus(
             raise RuntimeError(f"failed to write realistic corpus image: {output_path}")
         entries.append((output_path, annotations, "train-a", "train"))
 
-    validation_base = _smooth_generated_wafer(source.width(), source.height(), 178)
-    validation_scratch_cell = (1, 0)
-    _draw_realistic_scratch(validation_base, *validation_scratch_cell, "validation-b", 0)
-    validation_path = root / "realistic-validation-b.png"
-    if not validation_base.save(str(validation_path), "PNG"):
-        raise RuntimeError(f"failed to write realistic corpus image: {validation_path}")
-    entries.append(
-        (
-            validation_path,
-            {
-                validation_scratch_cell: ("scratch",),
-                (1, 1): ("particle",),
-                (2, 1): ("particle",),
-            },
-            "validation-b",
-            "validation",
+    for index, scratch_cell in enumerate(((1, 0), (2, 2))):
+        validation_base = _smooth_generated_wafer(
+            source.width(), source.height(), 178 + index * 6
         )
-    )
+        _draw_realistic_scratch(validation_base, *scratch_cell, "validation-b", index)
+        validation_path = root / f"realistic-validation-b-{index:02d}.png"
+        if not validation_base.save(str(validation_path), "PNG"):
+            raise RuntimeError(f"failed to write realistic corpus image: {validation_path}")
+        entries.append(
+            (
+                validation_path,
+                {
+                    scratch_cell: ("scratch",),
+                    (1, 1): ("particle",),
+                    (2, 1): ("particle",),
+                },
+                "validation-b",
+                "validation",
+            )
+        )
 
-    test_base = _smooth_generated_wafer(source.width(), source.height(), 146)
-    painter = QPainter(test_base)
-    painter.setPen(QPen(QColor(112, 112, 112), 3))
-    painter.drawEllipse(QRectF(180, 220, source.width() - 360, source.height() - 440))
-    painter.end()
-    test_scratch_cell = (1, 2)
-    _draw_realistic_scratch(test_base, *test_scratch_cell, "test-c", 0)
-    test_annotations = {
-        test_scratch_cell: ("scratch",),
-        (1, 1): ("particle",),
-        (2, 1): ("particle",),
-    }
-    test_path = root / "realistic-test-c.png"
-    if not test_base.save(str(test_path), "PNG"):
-        raise RuntimeError(f"failed to write realistic corpus image: {test_path}")
-    entries.append((test_path, test_annotations, "test-c", "test"))
+    for index, scratch_cell in enumerate(((1, 2), (2, 0))):
+        test_base = _smooth_generated_wafer(source.width(), source.height(), 146 + index * 6)
+        painter = QPainter(test_base)
+        painter.setPen(QPen(QColor(112 + index * 5, 112 + index * 5, 112 + index * 5), 3))
+        painter.drawEllipse(
+            QRectF(
+                180 + index * 35,
+                220 - index * 20,
+                source.width() - 360,
+                source.height() - 440,
+            )
+        )
+        painter.end()
+        _draw_realistic_scratch(test_base, *scratch_cell, "test-c", index)
+        test_annotations = {
+            scratch_cell: ("scratch",),
+            (1, 1): ("particle",),
+            (2, 1): ("particle",),
+        }
+        test_path = root / f"realistic-test-c-{index:02d}.png"
+        if not test_base.save(str(test_path), "PNG"):
+            raise RuntimeError(f"failed to write realistic corpus image: {test_path}")
+        entries.append((test_path, test_annotations, "test-c", "test"))
     return tuple(entries)
 
 
@@ -266,6 +283,14 @@ def _draw_realistic_scratch(
             ((130, 150), (370, 360)),
             ((140, 360), (390, 190)),
             ((70, 330), (430, 240)),
+            ((80, 180), (420, 390)),
+            ((110, 70), (360, 430)),
+            ((60, 370), (440, 110)),
+            ((180, 80), (390, 440)),
+            ((90, 290), (430, 350)),
+            ((150, 420), (400, 100)),
+            ((70, 210), (450, 160)),
+            ((210, 60), (330, 450)),
         )
         start, end = train_lines[variant]
         painter.drawLine(
@@ -273,9 +298,13 @@ def _draw_realistic_scratch(
             QPointF(left + end[0], top + end[1]),
         )
     elif family == "validation-b":
-        painter.drawLine(QPointF(left + 84, top + 120), QPointF(left + 354, top + 354))
+        lines = (((84, 120), (354, 354)), ((120, 410), (420, 180)))
+        start, end = lines[variant]
+        painter.drawLine(QPointF(left + start[0], top + start[1]), QPointF(left + end[0], top + end[1]))
     elif family == "test-c":
-        painter.drawLine(QPointF(left + 118, top + 382), QPointF(left + 438, top + 154))
+        lines = (((118, 382), (438, 154)), ((70, 140), (410, 390)))
+        start, end = lines[variant]
+        painter.drawLine(QPointF(left + start[0], top + start[1]), QPointF(left + end[0], top + end[1]))
     else:
         raise ValueError(f"unknown scratch base family: {family}")
     painter.end()
@@ -597,7 +626,8 @@ def _seed_project(root: Path, app: QApplication, source_image: Path | None = Non
             radius,
         )
         confirm_effective_wafer_area(project_path, asset.image_asset_id)
-        for index in range(1, 10):
+        image_count = 10 if source_kind == "synthetic" else len(realistic_corpus)
+        for index in range(1, image_count):
             if source_kind == "synthetic":
                 extra_path = root / f"synthetic-wafer-{index:02d}.png"
                 extra = _synthetic_wafer(index)

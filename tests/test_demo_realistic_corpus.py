@@ -5,16 +5,87 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QApplication
+
+from wafer_defect_studio.dataset_snapshot import load_dataset_snapshot
+from wafer_defect_studio.dataset_split import load_dataset_split
+from wafer_defect_studio.main_window import MainWindow
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "docs" / "demo"))
 
-from run_phase2_demo import build_realistic_corpus, select_family_isolated_split_seed
+from run_phase2_demo import (
+    _create_dataset,
+    _prepare_annotation,
+    _seed_project,
+    build_realistic_corpus,
+    select_family_isolated_split_seed,
+)
 
 
 class RealisticDemoCorpusTest(unittest.TestCase):
+    def test_registered_realistic_project_freezes_the_declared_16_2_2_split(self):
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_path = root / "source.png"
+            source = QImage(1536, 1536, QImage.Format.Format_Grayscale8)
+            source.fill(128)
+            self.assertTrue(source.save(str(source_path), "PNG"))
+            (
+                project_path,
+                asset,
+                _source_path,
+                profile,
+                source_kind,
+                _original_size,
+                corpus,
+            ) = _seed_project(root, app, source_path)
+            window = MainWindow(
+                settings=QSettings(str(root / "test.ini"), QSettings.Format.IniFormat)
+            )
+            try:
+                _prepare_annotation(
+                    window,
+                    project_path,
+                    asset,
+                    profile,
+                    app,
+                    source_kind=source_kind,
+                    realistic_corpus=corpus,
+                )
+                snapshot_id, split_id = _create_dataset(
+                    project_path, realistic_corpus=corpus
+                )
+            finally:
+                window.close()
+                window.deleteLater()
+                app.processEvents()
+
+            snapshot = load_dataset_snapshot(project_path, snapshot_id)
+            split = load_dataset_split(project_path, split_id)
+            self.assertEqual(
+                tuple(map(len, (split.train_image_ids, split.validation_image_ids, split.test_image_ids))),
+                (16, 2, 2),
+            )
+            self.assertEqual(len(snapshot.sources), 20)
+            for held_out_ids in (split.validation_image_ids, split.test_image_ids):
+                support = {
+                    code: sum(
+                        any(
+                            sample.image_asset_id == image_id
+                            and code in sample.class_codes
+                            for sample in snapshot.samples
+                        )
+                        for image_id in held_out_ids
+                    )
+                    for code in ("scratch", "particle")
+                }
+                self.assertEqual(support, {"scratch": 2, "particle": 2})
+
     def test_corpus_has_distinct_deterministic_sources_and_matching_variant_labels(self):
         source = QImage(1536, 1536, QImage.Format.Format_Grayscale8)
         source.fill(128)
@@ -22,7 +93,7 @@ class RealisticDemoCorpusTest(unittest.TestCase):
             first = build_realistic_corpus(Path(first_dir), source)
             second = build_realistic_corpus(Path(second_dir), source)
 
-            self.assertEqual(len(first), 10)
+            self.assertEqual(len(first), 20)
             first_fingerprints = tuple(
                 hashlib.sha256(path.read_bytes()).hexdigest()
                 for path, _annotations, _family, _split in first
@@ -31,10 +102,10 @@ class RealisticDemoCorpusTest(unittest.TestCase):
                 hashlib.sha256(path.read_bytes()).hexdigest()
                 for path, _annotations, _family, _split in second
             )
-            self.assertEqual(len(set(first_fingerprints)), 10)
+            self.assertEqual(len(set(first_fingerprints)), 20)
             self.assertEqual(first_fingerprints, second_fingerprints)
             train_paths = [path for path, _annotations, _family, split in first if split == "train"]
-            self.assertEqual(len(train_paths), 8)
+            self.assertEqual(len(train_paths), 16)
             self.assertTrue(all("train-base-" in path.name for path in train_paths))
 
             first_annotations = tuple(
@@ -68,13 +139,17 @@ class RealisticDemoCorpusTest(unittest.TestCase):
             self.assertTrue(hard_negatives)
             self.assertTrue(all(split == "train" for _annotations, split in hard_negatives))
             for held_out_split in ("validation", "test"):
-                held_out_annotations = next(
+                held_out_annotations = [
                     annotations
                     for _path, annotations, _family, split in first
                     if split == held_out_split
-                )
-                self.assertTrue(any("scratch" in codes for codes in held_out_annotations.values()))
-                self.assertTrue(any("particle" in codes for codes in held_out_annotations.values()))
+                ]
+                self.assertEqual(len(held_out_annotations), 2)
+                self.assertTrue(all(
+                    any("scratch" in codes for codes in annotations.values())
+                    and any("particle" in codes for codes in annotations.values())
+                    for annotations in held_out_annotations
+                ))
 
             first_family_fingerprints = {}
             for path, _annotations, family, _split in first:
@@ -138,9 +213,9 @@ class RealisticDemoCorpusTest(unittest.TestCase):
 
     def test_split_seed_keeps_every_base_family_in_its_declared_split(self):
         image_ids_by_family = {
-            "train-a": tuple(f"train-{index}" for index in range(8)),
-            "validation-b": ("validation-0",),
-            "test-c": ("test-0",),
+            "train-a": tuple(f"train-{index}" for index in range(16)),
+            "validation-b": ("validation-0", "validation-1"),
+            "test-c": ("test-0", "test-1"),
         }
         expected = {
             "train-a": "train",
@@ -157,7 +232,7 @@ class RealisticDemoCorpusTest(unittest.TestCase):
         ranked.sort(key=lambda item: hashlib.sha256(f"{seed}\0{item[0]}".encode()).digest())
         actual = {}
         for index, (_image_id, family) in enumerate(ranked):
-            split = "train" if index < 8 else "validation" if index == 8 else "test"
+            split = "train" if index < 16 else "validation" if index < 18 else "test"
             actual.setdefault(family, set()).add(split)
         self.assertEqual(actual, {family: {split} for family, split in expected.items()})
 
