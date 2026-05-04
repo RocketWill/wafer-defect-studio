@@ -70,6 +70,13 @@ class ProjectTrainingRunTest(unittest.TestCase):
                 window.workspace_actions["Train"].trigger()
                 app.processEvents()
 
+                legacy_request = window._training_controls._request_source()
+                legacy_bundle = TrainingInputBundle.from_json(
+                    Path(legacy_request.input_bundle_path).read_text(encoding="utf-8")
+                )
+                self.assertEqual(legacy_bundle.version, 1)
+                self.assertFalse(legacy_bundle.patch_bags)
+
                 window.findChild(QComboBox, "trainingModelModeComboBox").setCurrentText(
                     "Patch Classification v3"
                 )

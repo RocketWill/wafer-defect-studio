@@ -38,12 +38,20 @@ from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QLabel, QPus
 
 from wafer_defect_studio import image_asset, project
 from wafer_defect_studio.annotation import GridAnnotation, save_grid_annotation
-from wafer_defect_studio.dataset_split import create_dataset_split
+from wafer_defect_studio.dataset_snapshot import load_dataset_snapshot
+from wafer_defect_studio.dataset_split import create_dataset_split, load_dataset_split
 from wafer_defect_studio.dataset_workflow import create_project_dataset_snapshot
 from wafer_defect_studio.defect_class import DefectClass, save_defect_classes
 from wafer_defect_studio.detection_run import (
     create_detection_profile,
     load_detection_run,
+)
+from wafer_defect_studio.detection_controls import _load_staged_artifact
+from wafer_defect_studio.detection_worker import (
+    DetectionRequest,
+    DetectionTerminal,
+    decode_message as decode_detection_message,
+    start_detection_worker,
 )
 from wafer_defect_studio.evaluation_run import (
     load_evaluation,
@@ -75,6 +83,8 @@ from wafer_defect_studio.result_export import export_proposals_png
 from wafer_defect_studio.review import mark_image_reviewed
 from wafer_defect_studio.training_run import load_training_run, validate_project_checkpoint
 from wafer_defect_studio.training_scope import DataGroup, assign_image_to_data_group, save_data_groups
+
+from quality_evidence import build_comparison_report, compute_grid_quality_evidence
 
 
 def calibrated_profile_thresholds(
@@ -382,6 +392,23 @@ def main() -> int:
             _select_dataset_scope(window, app)
             _capture(window, output / "03-dataset-snapshot.png", app)
 
+            if source_kind == "realistic":
+                summary = _run_matched_gpu_comparison(
+                    window,
+                    project_path,
+                    grid_profile,
+                    snapshot_id,
+                    split_id,
+                    realistic_corpus,
+                    Path(temporary),
+                    app,
+                )
+                (output / "demo-summary.json").write_text(
+                    json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                return 0
+
             _activate_image(window, project_path, asset, grid_profile, "Training inputs ready")
             window.workspace_actions["Train"].trigger()
             training = _run_training(
@@ -399,7 +426,7 @@ def main() -> int:
                 raise RuntimeError("demo Training artifact is missing the real input bundle")
             _capture(window, output / "04-training-complete.png", app)
 
-            evaluation = _run_evaluation(
+            evaluation, _grid_evaluation = _run_evaluation(
                 project_path,
                 training.run_id,
                 snapshot_id,
@@ -868,6 +895,168 @@ def configure_training_epochs(window, source_kind: str) -> int:
     return epochs
 
 
+def _run_matched_gpu_comparison(
+    window: MainWindow,
+    project_path: Path,
+    grid_profile,
+    snapshot_id: str,
+    split_id: str,
+    realistic_corpus,
+    root: Path,
+    app: QApplication,
+) -> dict[str, object]:
+    split = load_dataset_split(project_path, split_id)
+    snapshot = load_dataset_snapshot(project_path, snapshot_id)
+    assets_by_id = {
+        item.asset.image_asset_id: item.asset
+        for item in image_asset.load_image_assets(project_path)
+    }
+    reports = {}
+    for mode, label in (
+        ("cam_v2", "CAM v2"),
+        ("patch_v3", "Patch Classification v3"),
+    ):
+        _activate_image(
+            window,
+            project_path,
+            assets_by_id[split.train_image_ids[0]],
+            grid_profile,
+            f"{label} training inputs ready",
+        )
+        window.workspace_actions["Train"].trigger()
+        started = time.monotonic()
+        training = _run_training(
+            window,
+            snapshot_id,
+            split_id,
+            app,
+            source_kind="realistic",
+            model_mode=mode,
+        )
+        train_seconds = time.monotonic() - started
+
+        started = time.monotonic()
+        evaluation, grid_evaluation = _run_evaluation(
+            project_path,
+            training.run_id,
+            snapshot_id,
+            split_id,
+            root / mode,
+            device="cuda",
+            evaluation_id=f"demo-{mode}-evaluation",
+        )
+        evaluation_seconds = time.monotonic() - started
+        thresholds = calibrated_profile_thresholds(
+            {"thresholds": evaluation.thresholds}, ("scratch", "particle")
+        )
+        patch_mode = mode == "patch_v3"
+
+        rows = []
+        detection_ids = []
+        started = time.monotonic()
+        for split_name, image_ids in (
+            ("validation", split.validation_image_ids),
+            ("test", split.test_image_ids),
+        ):
+            for image_index, image_id in enumerate(image_ids):
+                current = assets_by_id[image_id]
+                _activate_image(
+                    window, project_path, current, grid_profile, f"{label} Detection ready"
+                )
+                request_id = f"evidence-{mode}-{split_name}-{image_index}"
+                request = DetectionRequest(
+                    request_id=request_id,
+                    source=np.asarray(window._loaded_wafer_image.pixels).reshape(
+                        window._loaded_wafer_image.height,
+                        window._loaded_wafer_image.width,
+                    ),
+                    staging_path=root / mode / request_id,
+                    run_id=request_id,
+                    profile_id=f"evidence-{mode}",
+                    class_names=("scratch", "particle"),
+                    window_size=(128, 128) if patch_mode else (512, 512),
+                    stride=(64, 64) if patch_mode else (512, 512),
+                    reflect_padding=True,
+                    center_weighting="linear",
+                    device="cuda",
+                    checkpoint_path=training.artifact_path / "model.pt",
+                    batch_size=8,
+                    model_id=f"training-run:{training.run_id}",
+                )
+                terminal = _collect_detection_worker(start_detection_worker(request))
+                if terminal.status != "completed":
+                    raise RuntimeError(f"Detection worker failed: {terminal}")
+                artifact = _load_staged_artifact(request.staging_path)
+                detection_ids.append(request_id)
+                regions = generate_confidence_regions(
+                    artifact,
+                    thresholds=thresholds,
+                    map_generation={"smoothing": 1, "minimum_area": 1},
+                )
+                for sample in snapshot.samples:
+                    if sample.image_asset_id != image_id:
+                        continue
+                    retained = tuple(
+                        code
+                        for code in ("scratch", "particle")
+                        if np.any(
+                            regions[code][
+                                sample.y : sample.y + sample.height,
+                                sample.x : sample.x + sample.width,
+                            ]
+                        )
+                    )
+                    rows.append(
+                        {
+                            "image_id": image_id,
+                            "split": split_name,
+                            "grid": (sample.row, sample.column),
+                            "asserted": sample.class_codes,
+                            "predicted": retained,
+                            "retained": retained,
+                        }
+                    )
+        detection_seconds = time.monotonic() - started
+        evidence = compute_grid_quality_evidence(
+            ("scratch", "particle"), grid_evaluation, rows
+        )
+        checkpoint = validate_project_checkpoint(training.artifact_path / "model.pt")
+        report = {
+            "checkpoint_version": checkpoint["checkpoint_format"],
+            "runtime_seconds": {
+                "train": train_seconds,
+                "evaluation": evaluation_seconds,
+                "detection": detection_seconds,
+            },
+            "grid_evaluation": evidence["grid_evaluation"],
+            "coarse_localization": evidence["coarse_localization"],
+            "evidence_status": evidence["evidence_status"],
+            "thresholds_from_validation": thresholds,
+            "evaluation_id": evaluation.evaluation_id,
+            "detection_request_ids": detection_ids,
+        }
+        if patch_mode:
+            report.update(
+                {"patch_size": 128, "patch_stride": 64, "bag_pooling": "max"}
+            )
+        reports[mode] = report
+    result = build_comparison_report(split_id, reports["cam_v2"], reports["patch_v3"])
+    result.update(
+        {
+            "source_kind": "realistic",
+            "generated_demo_data": True,
+            "snapshot_id": snapshot_id,
+            "corpus": {
+                "images": len(realistic_corpus),
+                "train": len(split.train_image_ids),
+                "validation": len(split.validation_image_ids),
+                "test": len(split.test_image_ids),
+            },
+        }
+    )
+    return result
+
+
 def _run_training(
     window: MainWindow,
     snapshot_id: str,
@@ -875,6 +1064,7 @@ def _run_training(
     app: QApplication,
     *,
     source_kind: str = "synthetic",
+    model_mode: str = "cam_v2",
 ):
     _select_combo(window, "trainingSnapshotComboBox", snapshot_id)
     _select_combo(window, "trainingSplitComboBox", split_id)
@@ -887,6 +1077,13 @@ def _run_training(
         "cuda" if source_kind == "realistic" else "cpu"
     )
     configure_training_weights_policy(window, source_kind)
+    mode_combo = window.findChild(QComboBox, "trainingModelModeComboBox")
+    mode_combo.setCurrentText(
+        "Patch Classification v3" if model_mode == "patch_v3" else "CAM v2"
+    )
+    if model_mode == "patch_v3":
+        window.findChild(QSpinBox, "trainingPatchSizeSpinBox").setValue(128)
+        window.findChild(QSpinBox, "trainingPatchStrideSpinBox").setValue(64)
     start = window.findChild(QPushButton, "startTrainingButton")
     if start is None or not start.isEnabled():
         raise RuntimeError("Training controls are not ready")
@@ -919,6 +1116,7 @@ def _run_evaluation(
     root: Path,
     *,
     device: str = "cpu",
+    evaluation_id: str = "demo-evaluation",
 ):
     calibration_request = build_checkpoint_evaluation_request(
         project_path,
@@ -962,9 +1160,32 @@ def _run_evaluation(
         request.staging_path,
         training_run_id=training_run_id,
         actor="Demo Engineer",
-        evaluation_id="demo-evaluation",
+        evaluation_id=evaluation_id,
     )
-    return evaluation
+    truth = np.asarray(request.y_true, dtype=np.int8)
+    scores = np.asarray(request.y_score, dtype=np.float64)
+    thresholds = np.asarray(request.thresholds, dtype=np.float64)
+    predicted = scores >= thresholds
+    exact = int(np.count_nonzero(np.all(predicted == truth.astype(bool), axis=1)))
+    persisted_by_class = {
+        row["class_name"]: {
+            "tp": row["true_positive"],
+            "fp": row["false_positive"],
+            "fn": row["false_negative"],
+            "f1": row["f1"],
+        }
+        for row in evaluation.metrics["per_class"]
+    }
+    grid_evaluation = {
+        "split": "test",
+        "per_class": persisted_by_class,
+        "exact_grid_match": {
+            "count": exact,
+            "total": len(truth),
+            "rate": exact / len(truth),
+        },
+    }
+    return evaluation, grid_evaluation
 
 
 def _run_detection(window, project_path, asset, profile, app, *, timeout: float = 120):
@@ -1003,6 +1224,14 @@ def _collect_worker(handle, decoder):
         if isinstance(messages[-1], (EvaluationTerminal,)):
             handle.join(timeout=30)
             return messages[-1]
+
+
+def _collect_detection_worker(handle) -> DetectionTerminal:
+    while True:
+        message = decode_detection_message(handle.queue.get(timeout=600))
+        if isinstance(message, DetectionTerminal):
+            handle.join(timeout=30)
+            return message
 
 
 def _select_combo(window, object_name: str, value: str) -> None:

@@ -1726,7 +1726,7 @@ class MainWindow(QMainWindow):
                     request.config.snapshot_id,
                     request.config.split_id,
                     bundle_path,
-                    config=request.config,
+                    config=request.config if request.config.patch_size is not None else None,
                 )
             except Exception as error:
                 update_training_run_terminal(

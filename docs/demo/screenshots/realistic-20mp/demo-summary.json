@@ -1,148 +1,167 @@
 {
-  "synthetic_source": false,
-  "source_kind": "realistic",
-  "model_backed": true,
-  "source": {
-    "width": 1536,
-    "height": 1536,
-    "format": "uint8 PNG",
-    "processing_proxy": true
-  },
-  "source_original": {
-    "width": 4472,
-    "height": 4472,
-    "format": "uint8 PNG"
-  },
-  "classes": [
-    "scratch",
-    "particle"
-  ],
-  "training": {
-    "run_id": "08944b08-98bb-4012-8219-f4829cd2b9b9",
-    "status": "completed",
-    "architecture": "resnet18",
-    "epochs": 20,
-    "device": "cuda",
-    "metrics": {},
-    "checkpoint_sha256": "1580a67ae16e504a41e4d2e607e7e477ec8fc677c725f13823ac96a65fc7e357",
-    "checkpoint_format": "wafer_defect_studio.resnet18.v2",
-    "class_order": [
-      "scratch",
-      "particle"
-    ],
-    "input_size": {
-      "width": 512,
-      "height": 512
+  "split_id": "34cd48b95c3dc16773b8d1ed5f080786b151070777808c9183b3da60e6e526bb",
+  "models": {
+    "cam_v2": {
+      "split_id": "34cd48b95c3dc16773b8d1ed5f080786b151070777808c9183b3da60e6e526bb",
+      "checkpoint_version": "wafer_defect_studio.resnet18.v2",
+      "runtime_seconds": {
+        "train": 33.35900000005495,
+        "evaluation": 12.047000000020489,
+        "detection": 196.4529999999795
+      },
+      "grid_evaluation": {
+        "split": "test",
+        "per_class": {
+          "scratch": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 2,
+            "f1": 0.0
+          },
+          "particle": {
+            "tp": 4,
+            "fp": 0,
+            "fn": 0,
+            "f1": 1.0
+          }
+        },
+        "exact_grid_match": {
+          "count": 16,
+          "total": 18,
+          "rate": 0.8888888888888888
+        }
+      },
+      "coarse_localization": {
+        "per_class": {
+          "scratch": {
+            "asserted_grid_intersections": 4,
+            "asserted_grids": 4,
+            "intersection_rate": 1.0,
+            "normal_grid_leaks": 32,
+            "normal_grids": 32,
+            "normal_grid_leak_rate": 1.0
+          },
+          "particle": {
+            "asserted_grid_intersections": 8,
+            "asserted_grids": 8,
+            "intersection_rate": 1.0,
+            "normal_grid_leaks": 28,
+            "normal_grids": 28,
+            "normal_grid_leak_rate": 1.0
+          }
+        },
+        "asserted_image_support": {
+          "scratch": {
+            "validation": 2,
+            "test": 2
+          },
+          "particle": {
+            "validation": 2,
+            "test": 2
+          }
+        }
+      },
+      "evidence_status": "measured",
+      "thresholds_from_validation": {
+        "scratch": 0.26717546582221985,
+        "particle": 0.39611873030662537
+      },
+      "evaluation_id": "demo-cam_v2-evaluation",
+      "detection_request_ids": [
+        "evidence-cam_v2-validation-0",
+        "evidence-cam_v2-validation-1",
+        "evidence-cam_v2-test-0",
+        "evidence-cam_v2-test-1"
+      ]
+    },
+    "patch_v3": {
+      "split_id": "34cd48b95c3dc16773b8d1ed5f080786b151070777808c9183b3da60e6e526bb",
+      "checkpoint_version": "wafer_defect_studio.resnet18.v3",
+      "runtime_seconds": {
+        "train": 94.23499999998603,
+        "evaluation": 12.562000000034459,
+        "detection": 238.0779999999795
+      },
+      "grid_evaluation": {
+        "split": "test",
+        "per_class": {
+          "scratch": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 1,
+            "f1": 0.6666666666666666
+          },
+          "particle": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 2,
+            "f1": 0.6666666666666666
+          }
+        },
+        "exact_grid_match": {
+          "count": 15,
+          "total": 18,
+          "rate": 0.8333333333333334
+        }
+      },
+      "coarse_localization": {
+        "per_class": {
+          "scratch": {
+            "asserted_grid_intersections": 1,
+            "asserted_grids": 4,
+            "intersection_rate": 0.25,
+            "normal_grid_leaks": 0,
+            "normal_grids": 32,
+            "normal_grid_leak_rate": 0.0
+          },
+          "particle": {
+            "asserted_grid_intersections": 0,
+            "asserted_grids": 8,
+            "intersection_rate": 0.0,
+            "normal_grid_leaks": 0,
+            "normal_grids": 28,
+            "normal_grid_leak_rate": 0.0
+          }
+        },
+        "asserted_image_support": {
+          "scratch": {
+            "validation": 2,
+            "test": 2
+          },
+          "particle": {
+            "validation": 2,
+            "test": 2
+          }
+        }
+      },
+      "evidence_status": "measured",
+      "thresholds_from_validation": {
+        "scratch": 0.8065810203552246,
+        "particle": 0.9794095158576965
+      },
+      "evaluation_id": "demo-patch_v3-evaluation",
+      "detection_request_ids": [
+        "evidence-patch_v3-validation-0",
+        "evidence-patch_v3-validation-1",
+        "evidence-patch_v3-test-0",
+        "evidence-patch_v3-test-1"
+      ],
+      "patch_size": 128,
+      "patch_stride": 64,
+      "bag_pooling": "max"
     }
   },
-  "evaluation": {
-    "evaluation_id": "demo-evaluation",
-    "split_id": "fc0e0e82361699a585201a4be529f1eef9dae6b1e464fe513b4acc33c902503c",
-    "macro_f1": 0.5,
-    "per_class": [
-      {
-        "class_name": "scratch",
-        "f1": 0.0,
-        "false_negative": 1,
-        "false_positive": 0,
-        "fpr": 0.0,
-        "precision": 0.0,
-        "recall": 0.0,
-        "support": 1,
-        "threshold": 0.1861439347267151,
-        "true_negative": 8,
-        "true_positive": 0
-      },
-      {
-        "class_name": "particle",
-        "f1": 1.0,
-        "false_negative": 0,
-        "false_positive": 0,
-        "fpr": 0.0,
-        "precision": 1.0,
-        "recall": 1.0,
-        "support": 2,
-        "threshold": 0.37573081254959106,
-        "true_negative": 7,
-        "true_positive": 2
-      }
-    ],
-    "target_satisfied": true,
-    "decisions": [
-      "candidate",
-      "validated",
-      "approved"
-    ]
-  },
-  "detection": {
-    "run_id": "c4de7a3e-fd46-42f7-a4d7-5af822c71862",
-    "status": "completed",
-    "class_names": [
-      "scratch",
-      "particle"
-    ],
-    "map_shape": [
-      1536,
-      1536,
-      2
-    ],
-    "map_method": "all_convolutional_sigmoid",
-    "profile": {
-      "profile_id": "demo-profile",
-      "window_size": [
-        512,
-        512
-      ],
-      "stride": [
-        512,
-        512
-      ],
-      "thresholds": {
-        "scratch": 0.5,
-        "particle": 0.5
-      },
-      "map_generation": {
-        "smoothing": 1,
-        "minimum_area": 1
-      }
-    },
-    "scratch_min": 6.617086182814091e-05,
-    "scratch_max": 0.5810440182685852,
-    "heatmap": "06-heatmap-export.png"
-  },
-  "annotation_validation": {
-    "evaluated_cells": 9,
-    "exact_cell_matches": 2,
-    "exact_match_rate": 0.2222222222222222,
-    "macro_f1": 0.5151515151515151,
-    "classes": [
-      {
-        "class_name": "scratch",
-        "true_positive": 1,
-        "false_positive": 1,
-        "false_negative": 0,
-        "support": 1,
-        "predicted_positive": 2,
-        "precision": 0.5,
-        "recall": 1.0,
-        "f1": 0.6666666666666666
-      },
-      {
-        "class_name": "particle",
-        "true_positive": 2,
-        "false_positive": 7,
-        "false_negative": 0,
-        "support": 2,
-        "predicted_positive": 9,
-        "precision": 0.2222222222222222,
-        "recall": 1.0,
-        "f1": 0.3636363636363636
-      }
-    ]
-  },
-  "validation_limitations": [
-    "Generated 20MP source was resized to a 1536px processing proxy; fixed grid labels are for pipeline validation only.",
-    "Metrics are observed on one held-out image and are not production accuracy claims.",
-    "Confidence regions are approximate localization, not a segmentation mask."
-  ]
+  "limitations": [
+    "Generated Demo data is not a production accuracy claim.",
+    "Localization is approximate Grid evidence, not pixel segmentation."
+  ],
+  "source_kind": "realistic",
+  "generated_demo_data": true,
+  "snapshot_id": "57da0b21-ae2b-4c12-adee-bc10da92bb95",
+  "corpus": {
+    "images": 20,
+    "train": 16,
+    "validation": 2,
+    "test": 2
+  }
 }

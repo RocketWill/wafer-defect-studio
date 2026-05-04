@@ -8,16 +8,13 @@ from typing import Any
 
 def compute_grid_quality_evidence(
     class_codes: Sequence[str],
+    grid_evaluation: Mapping[str, Any],
     rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Measure classification and coarse Grid localization without pixel metrics."""
+    """Join test Grid Evaluation with Detection-only coarse localization."""
 
     classes = tuple(class_codes)
     values = tuple(rows)
-    exact = sum(
-        set(row["asserted"]) == set(row["predicted"])
-        for row in values
-    )
     support = {
         code: {
             split: len(
@@ -33,29 +30,17 @@ def compute_grid_quality_evidence(
     }
     per_class = {}
     for code in classes:
-        tp = sum(code in row["asserted"] and code in row["predicted"] for row in values)
-        fp = sum(code not in row["asserted"] and code in row["predicted"] for row in values)
-        fn = sum(code in row["asserted"] and code not in row["predicted"] for row in values)
-        f1_denominator = 2 * tp + fp + fn
         asserted = tuple(row for row in values if code in row["asserted"])
         normal = tuple(row for row in values if code not in row["asserted"])
         intersections = sum(code in row["retained"] for row in asserted)
         leaks = sum(code in row["retained"] for row in normal)
         per_class[code] = {
-            "classification": {
-                "tp": tp,
-                "fp": fp,
-                "fn": fn,
-                "f1": 0.0 if f1_denominator == 0 else 2 * tp / f1_denominator,
-            },
-            "localization": {
-                "asserted_grid_intersections": intersections,
-                "asserted_grids": len(asserted),
-                "intersection_rate": 0.0 if not asserted else intersections / len(asserted),
-                "normal_grid_leaks": leaks,
-                "normal_grids": len(normal),
-                "normal_grid_leak_rate": 0.0 if not normal else leaks / len(normal),
-            },
+            "asserted_grid_intersections": intersections,
+            "asserted_grids": len(asserted),
+            "intersection_rate": 0.0 if not asserted else intersections / len(asserted),
+            "normal_grid_leaks": leaks,
+            "normal_grids": len(normal),
+            "normal_grid_leak_rate": 0.0 if not normal else leaks / len(normal),
         }
     sufficient = all(
         support[code][split] >= 2
@@ -64,14 +49,32 @@ def compute_grid_quality_evidence(
     )
     return {
         "evidence_status": "measured" if sufficient else "insufficient_evidence",
-        "exact_grid_match": {
-            "count": exact,
-            "total": len(values),
-            "rate": 0.0 if not values else exact / len(values),
+        "grid_evaluation": dict(grid_evaluation),
+        "coarse_localization": {
+            "per_class": per_class,
+            "asserted_image_support": support,
         },
-        "per_class": per_class,
-        "asserted_image_support": support,
     }
 
 
-__all__ = ["compute_grid_quality_evidence"]
+def build_comparison_report(
+    split_id: str,
+    cam_v2: Mapping[str, Any],
+    patch_v3: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind both measured model reports to one persisted Dataset Split."""
+
+    return {
+        "split_id": split_id,
+        "models": {
+            "cam_v2": {"split_id": split_id, **cam_v2},
+            "patch_v3": {"split_id": split_id, **patch_v3},
+        },
+        "limitations": [
+            "Generated Demo data is not a production accuracy claim.",
+            "Localization is approximate Grid evidence, not pixel segmentation.",
+        ],
+    }
+
+
+__all__ = ["build_comparison_report", "compute_grid_quality_evidence"]
