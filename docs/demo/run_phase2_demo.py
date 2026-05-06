@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -85,6 +86,7 @@ from wafer_defect_studio.training_run import load_training_run, validate_project
 from wafer_defect_studio.training_scope import DataGroup, assign_image_to_data_group, save_data_groups
 
 from quality_evidence import build_comparison_report, compute_grid_quality_evidence
+from defect_oracle import DefectOracle, Particle, Scratch
 
 
 def calibrated_profile_thresholds(
@@ -182,6 +184,107 @@ _REALISTIC_TRAIN_SCRATCH_CELLS: tuple[tuple[int, int], ...] = (
     (1, 2),
 )
 
+_REALISTIC_SCRATCH_LINES = {
+    "train-a": (
+        ((72, 96), (408, 416)), ((100, 410), (380, 140)), ((60, 240), (440, 280)),
+        ((250, 60), (280, 450)), ((130, 150), (370, 360)), ((140, 360), (390, 190)),
+        ((70, 330), (430, 240)), ((80, 180), (420, 390)), ((110, 70), (360, 430)),
+        ((60, 370), (440, 110)), ((180, 80), (390, 440)), ((90, 290), (430, 350)),
+        ((150, 420), (400, 100)), ((70, 210), (450, 160)), ((210, 60), (330, 450)),
+    ),
+    "validation-b": (((84, 120), (354, 354)), ((120, 410), (420, 180))),
+    "test-c": (((118, 382), (438, 154)), ((70, 140), (410, 390))),
+}
+
+
+@dataclass(frozen=True)
+class RealisticCorpusCase:
+    filename: str
+    family: str
+    split: str
+    center_gray: int
+    variant: int
+    oracle: DefectOracle
+
+
+def _realistic_case(
+    filename: str,
+    family: str,
+    split: str,
+    center_gray: int,
+    variant: int,
+    scratch_cell: tuple[int, int] | None,
+) -> RealisticCorpusCase:
+    defects: list[Scratch | Particle] = [
+        Particle("particle", (891, 737), 4),
+        Particle("particle", (645, 1106), 4),
+    ]
+    if scratch_cell is not None:
+        row, column = scratch_cell
+        start, end = _REALISTIC_SCRATCH_LINES[family][variant]
+        defects.append(
+            Scratch(
+                "scratch",
+                (
+                    (column * 512 + start[0], row * 512 + start[1]),
+                    (column * 512 + end[0], row * 512 + end[1]),
+                ),
+                5,
+            )
+        )
+    return RealisticCorpusCase(
+        filename, family, split, center_gray, variant, DefectOracle(1536, 1536, tuple(defects))
+    )
+
+
+REALISTIC_CORPUS_MANIFEST: tuple[RealisticCorpusCase, ...] = tuple(
+    _realistic_case(
+        f"realistic-train-base-{index:02d}.png",
+        "train-a",
+        "train",
+        center_gray,
+        index,
+        _REALISTIC_TRAIN_SCRATCH_CELLS[index] if index < 15 else None,
+    )
+    for index, center_gray in enumerate(_REALISTIC_TRAIN_CENTER_GRAYS)
+) + tuple(
+    _realistic_case(
+        f"realistic-validation-b-{index:02d}.png",
+        "validation-b",
+        "validation",
+        178 + index * 6,
+        index,
+        scratch_cell,
+    )
+    for index, scratch_cell in enumerate(((1, 0), (2, 2)))
+) + tuple(
+    _realistic_case(
+        f"realistic-test-c-{index:02d}.png",
+        "test-c",
+        "test",
+        146 + index * 6,
+        index,
+        scratch_cell,
+    )
+    for index, scratch_cell in enumerate(((1, 2), (2, 0)))
+)
+
+
+def validate_realistic_corpus_annotations(
+    case: RealisticCorpusCase,
+    actual: Mapping[tuple[int, int], tuple[str, ...]],
+) -> None:
+    grids = annotation_grids(case.oracle.image_width, case.oracle.image_height, 512, 512)
+    expected = {grid: codes for grid, codes in case.oracle.grid_truth(grids).items() if codes}
+    for grid in sorted(expected.keys() | actual.keys()):
+        expected_codes = expected.get(grid, ())
+        actual_codes = actual.get(grid, ())
+        if actual_codes != expected_codes:
+            raise ValueError(
+                f"realistic corpus truth mismatch: filename={case.filename} "
+                f"grid={grid!r} expected={expected_codes!r} actual={actual_codes!r}"
+            )
+
 
 def build_realistic_corpus(
     root: Path,
@@ -200,123 +303,44 @@ def build_realistic_corpus(
         raise ValueError("realistic corpus source must use a square grid")
 
     entries: list[tuple[Path, dict[tuple[int, int], tuple[str, ...]], str, str]] = []
-    for index, center_gray in enumerate(_REALISTIC_TRAIN_CENTER_GRAYS):
-        variant = _smooth_generated_wafer(source.width(), source.height(), center_gray)
+    for case in REALISTIC_CORPUS_MANIFEST:
+        variant = _smooth_generated_wafer(source.width(), source.height(), case.center_gray)
         painter = QPainter(variant)
-        inset = 82 + index * 17
-        ring_gray = 94 + index * 3
-        painter.setPen(QPen(QColor(ring_gray, ring_gray, ring_gray), 2 + index % 3))
-        painter.drawEllipse(
-            QRectF(inset, inset + index * 4, source.width() - inset * 2, source.height() - inset * 2)
-        )
-        painter.setPen(QPen(QColor(232, 232, 232), 4 + index % 2))
-        painter.drawPoint(QPointF(610 + index * 29, 350 + index * 31))
+        if case.family == "train-a":
+            inset = 82 + case.variant * 17
+            ring_gray = 94 + case.variant * 3
+            painter.setPen(QPen(QColor(ring_gray, ring_gray, ring_gray), 2 + case.variant % 3))
+            painter.drawEllipse(
+                QRectF(inset, inset + case.variant * 4, source.width() - inset * 2, source.height() - inset * 2)
+            )
+        elif case.family == "test-c":
+            painter.setPen(QPen(QColor(112 + case.variant * 5, 112 + case.variant * 5, 112 + case.variant * 5), 3))
+            painter.drawEllipse(
+                QRectF(180 + case.variant * 35, 220 - case.variant * 20, source.width() - 360, source.height() - 440)
+            )
         painter.end()
-        annotations = {(1, 1): ("particle",), (2, 1): ("particle",)}
-        if index < len(_REALISTIC_TRAIN_CENTER_GRAYS) - 1:
-            scratch_row, scratch_column = _REALISTIC_TRAIN_SCRATCH_CELLS[index]
-            _draw_realistic_scratch(variant, scratch_row, scratch_column, "train-a", index)
-            existing_codes = annotations.get((scratch_row, scratch_column), ())
-            annotations[(scratch_row, scratch_column)] = (*existing_codes, "scratch")
-        output_path = root / f"realistic-train-base-{index:02d}.png"
+        _render_realistic_defects(variant, case.oracle)
+        grids = annotation_grids(source.width(), source.height(), 512, 512)
+        annotations = {grid: codes for grid, codes in case.oracle.grid_truth(grids).items() if codes}
+        validate_realistic_corpus_annotations(case, annotations)
+        output_path = root / case.filename
         if not variant.save(str(output_path), "PNG"):
             raise RuntimeError(f"failed to write realistic corpus image: {output_path}")
-        entries.append((output_path, annotations, "train-a", "train"))
-
-    for index, scratch_cell in enumerate(((1, 0), (2, 2))):
-        validation_base = _smooth_generated_wafer(
-            source.width(), source.height(), 178 + index * 6
-        )
-        _draw_realistic_scratch(validation_base, *scratch_cell, "validation-b", index)
-        validation_path = root / f"realistic-validation-b-{index:02d}.png"
-        if not validation_base.save(str(validation_path), "PNG"):
-            raise RuntimeError(f"failed to write realistic corpus image: {validation_path}")
-        entries.append(
-            (
-                validation_path,
-                {
-                    scratch_cell: ("scratch",),
-                    (1, 1): ("particle",),
-                    (2, 1): ("particle",),
-                },
-                "validation-b",
-                "validation",
-            )
-        )
-
-    for index, scratch_cell in enumerate(((1, 2), (2, 0))):
-        test_base = _smooth_generated_wafer(source.width(), source.height(), 146 + index * 6)
-        painter = QPainter(test_base)
-        painter.setPen(QPen(QColor(112 + index * 5, 112 + index * 5, 112 + index * 5), 3))
-        painter.drawEllipse(
-            QRectF(
-                180 + index * 35,
-                220 - index * 20,
-                source.width() - 360,
-                source.height() - 440,
-            )
-        )
-        painter.end()
-        _draw_realistic_scratch(test_base, *scratch_cell, "test-c", index)
-        test_annotations = {
-            scratch_cell: ("scratch",),
-            (1, 1): ("particle",),
-            (2, 1): ("particle",),
-        }
-        test_path = root / f"realistic-test-c-{index:02d}.png"
-        if not test_base.save(str(test_path), "PNG"):
-            raise RuntimeError(f"failed to write realistic corpus image: {test_path}")
-        entries.append((test_path, test_annotations, "test-c", "test"))
+        entries.append((output_path, annotations, case.family, case.split))
     return tuple(entries)
 
 
-def _draw_realistic_scratch(
-    image: QImage,
-    row: int,
-    column: int,
-    family: str,
-    variant: int,
-) -> None:
-    """Add one deterministic dark stroke inside a non-corner Annotation Grid."""
-
-    left = column * 512
-    top = row * 512
+def _render_realistic_defects(image: QImage, oracle: DefectOracle) -> None:
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    painter.setPen(QPen(QColor(18, 18, 18), 9))
-    if family == "train-a":
-        train_lines = (
-            ((72, 96), (408, 416)),
-            ((100, 410), (380, 140)),
-            ((60, 240), (440, 280)),
-            ((250, 60), (280, 450)),
-            ((130, 150), (370, 360)),
-            ((140, 360), (390, 190)),
-            ((70, 330), (430, 240)),
-            ((80, 180), (420, 390)),
-            ((110, 70), (360, 430)),
-            ((60, 370), (440, 110)),
-            ((180, 80), (390, 440)),
-            ((90, 290), (430, 350)),
-            ((150, 420), (400, 100)),
-            ((70, 210), (450, 160)),
-            ((210, 60), (330, 450)),
-        )
-        start, end = train_lines[variant]
-        painter.drawLine(
-            QPointF(left + start[0], top + start[1]),
-            QPointF(left + end[0], top + end[1]),
-        )
-    elif family == "validation-b":
-        lines = (((84, 120), (354, 354)), ((120, 410), (420, 180)))
-        start, end = lines[variant]
-        painter.drawLine(QPointF(left + start[0], top + start[1]), QPointF(left + end[0], top + end[1]))
-    elif family == "test-c":
-        lines = (((118, 382), (438, 154)), ((70, 140), (410, 390)))
-        start, end = lines[variant]
-        painter.drawLine(QPointF(left + start[0], top + start[1]), QPointF(left + end[0], top + end[1]))
-    else:
-        raise ValueError(f"unknown scratch base family: {family}")
+    for defect in oracle.defects:
+        if isinstance(defect, Scratch):
+            painter.setPen(QPen(QColor(18, 18, 18), defect.radius * 2 - 1))
+            for start, end in zip(defect.points, defect.points[1:]):
+                painter.drawLine(QPointF(*start), QPointF(*end))
+        else:
+            painter.setPen(QPen(QColor(238, 238, 238), defect.radius * 2 - 1))
+            painter.drawPoint(QPointF(*defect.center))
     painter.end()
 
 
@@ -330,9 +354,6 @@ def _smooth_generated_wafer(width: int, height: int, center_gray: int) -> QImage
     painter.setBrush(gradient)
     painter.setPen(QPen(QColor(205, 205, 205), 3))
     painter.drawEllipse(QRectF(width * 0.02, height * 0.02, width * 0.96, height * 0.96))
-    painter.setPen(QPen(QColor(238, 238, 238), 7))
-    painter.drawPoint(QPointF(width * 0.58, height * 0.48))
-    painter.drawPoint(QPointF(width * 0.42, height * 0.72))
     painter.end()
     return image
 

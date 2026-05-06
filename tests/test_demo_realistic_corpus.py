@@ -1,4 +1,5 @@
 import hashlib
+import re
 import sys
 import tempfile
 import unittest
@@ -18,15 +19,56 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "docs" / "demo"))
 
 from run_phase2_demo import (
+    REALISTIC_CORPUS_MANIFEST,
     _create_dataset,
     _prepare_annotation,
     _seed_project,
     build_realistic_corpus,
     select_family_isolated_split_seed,
+    validate_realistic_corpus_annotations,
 )
 
 
 class RealisticDemoCorpusTest(unittest.TestCase):
+    def test_frozen_manifest_renders_oracle_truth_and_rejects_class_drift(self):
+        source = QImage(1536, 1536, QImage.Format.Format_Grayscale8)
+        source.fill(128)
+        with tempfile.TemporaryDirectory() as temporary:
+            corpus = build_realistic_corpus(Path(temporary), source)
+
+        self.assertEqual(len(REALISTIC_CORPUS_MANIFEST), 20)
+        self.assertEqual(
+            tuple((case.family, case.split) for case in REALISTIC_CORPUS_MANIFEST),
+            (("train-a", "train"),) * 16
+            + (("validation-b", "validation"),) * 2
+            + (("test-c", "test"),) * 2,
+        )
+        for case, (path, annotations, family, split) in zip(
+            REALISTIC_CORPUS_MANIFEST, corpus, strict=True
+        ):
+            self.assertEqual((path.name, family, split), (case.filename, case.family, case.split))
+            self.assertTrue(annotations)
+            validate_realistic_corpus_annotations(case, annotations)
+
+        case = REALISTIC_CORPUS_MANIFEST[0]
+        annotations = corpus[0][1]
+        grid = next(iter(annotations))
+        expected = annotations[grid]
+        variants = {
+            "missing": {**annotations, grid: expected[:-1]},
+            "extra": {**annotations, grid: (*expected, "contamination")},
+            "tampered": {**annotations, grid: ("scratch",)},
+        }
+        for drift, actual in variants.items():
+            with self.subTest(drift=drift), self.assertRaisesRegex(
+                ValueError,
+                re.escape(
+                    f"filename={case.filename} grid={grid!r} "
+                    f"expected={expected!r} actual={actual[grid]!r}"
+                ),
+            ):
+                validate_realistic_corpus_annotations(case, actual)
+
     def test_registered_realistic_project_freezes_the_declared_16_2_2_split(self):
         app = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as temporary:
