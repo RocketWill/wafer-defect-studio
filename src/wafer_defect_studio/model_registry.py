@@ -114,6 +114,52 @@ class ResNet18Classifier(nn.Module):
         return self.backbone(duplicate_grayscale_channels(inputs))
 
 
+class ResNet18SpatialLogits(nn.Module):
+    """ResNet18 multi-scale features projected to stride-4 raw class logits."""
+
+    architecture = "resnet18_spatial_logits"
+
+    def __init__(
+        self,
+        class_count: int,
+        *,
+        weights: WeightsPolicy = WeightsPolicy.NONE,
+    ) -> None:
+        super().__init__()
+        if isinstance(class_count, bool) or not isinstance(class_count, int) or class_count < 1:
+            raise ModelRegistryError("class_count must be a positive integer")
+        self.class_count = class_count
+        self.weights_policy = _coerce_weights_policy(weights)
+        torchvision_weights = (
+            None
+            if self.weights_policy is WeightsPolicy.NONE
+            else ResNet18_Weights.DEFAULT
+        )
+        self.backbone = resnet18(weights=torchvision_weights)
+        self.backbone.fc = nn.Identity()
+        self.spatial_head = nn.Conv2d(64 + 128 + 256 + 512, class_count, kernel_size=1)
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        inputs = duplicate_grayscale_channels(inputs)
+        backbone = self.backbone
+        features = backbone.maxpool(backbone.relu(backbone.bn1(backbone.conv1(inputs))))
+        layer1 = backbone.layer1(features)
+        layer2 = backbone.layer2(layer1)
+        layer3 = backbone.layer3(layer2)
+        layer4 = backbone.layer4(layer3)
+        output_size = layer1.shape[-2:]
+        multiscale = torch.cat(
+            [
+                layer1,
+                F.interpolate(layer2, size=output_size, mode="bilinear", align_corners=False),
+                F.interpolate(layer3, size=output_size, mode="bilinear", align_corners=False),
+                F.interpolate(layer4, size=output_size, mode="bilinear", align_corners=False),
+            ],
+            dim=1,
+        )
+        return self.spatial_head(multiscale)
+
+
 class ModelRegistry:
     """Thin internal registry; ResNet18 is the only supported architecture."""
 
@@ -161,6 +207,21 @@ def create_resnet18(
         weights_path=weights_path,
         feature_stride=feature_stride,
     )
+
+
+def create_resnet18_spatial_logits(
+    class_count: int,
+    *,
+    weights: WeightsPolicy | str | None = WeightsPolicy.NONE,
+    device: str | torch.device | None = None,
+) -> ResNet18SpatialLogits:
+    """Create the independent stride-4 spatial-logit ResNet18."""
+
+    model = ResNet18SpatialLogits(
+        class_count,
+        weights=_coerce_weights_policy(weights),
+    )
+    return model.to(resolve_device(device))
 
 
 def create_model(
@@ -290,10 +351,12 @@ __all__ = [
     "ModelRegistry",
     "ModelRegistryError",
     "ResNet18Classifier",
+    "ResNet18SpatialLogits",
     "SUPPORTED_ARCHITECTURES",
     "WeightsPolicy",
     "create_model",
     "create_resnet18",
+    "create_resnet18_spatial_logits",
     "duplicate_grayscale_channels",
     "load_project_checkpoint",
     "max_pool_patch_logits",
