@@ -14,4 +14,13 @@ def positive_spatial_mil_loss(logits: Tensor, targets: Tensor) -> Tensor:
     return F.softplus(-positive_logits).mean()
 
 
-__all__ = ["positive_spatial_mil_loss"]
+def absent_class_hard_negative_loss(logits: Tensor, targets: Tensor) -> Tensor:
+    """Penalize the strongest spatial response for each absent class."""
+
+    absent_logits = torch.amax(logits, dim=(-2, -1))[targets == 0]
+    if absent_logits.numel() == 0:
+        return logits.sum() * 0.0
+    return F.softplus(absent_logits).mean()
+
+
+__all__ = ["absent_class_hard_negative_loss", "positive_spatial_mil_loss"]
