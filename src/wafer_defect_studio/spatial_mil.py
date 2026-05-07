@@ -7,6 +7,28 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from .detection_windows import Rect
+from .training_input_bundle import TrainingInputBundle
+
+
+def derive_train_positive_class_weights(bundle: TrainingInputBundle) -> Tensor:
+    """Return capped inverse-positive-frequency weights from Training bags."""
+
+    train_ids = {
+        source.image_asset_id for source in bundle.sources if source.split == "train"
+    }
+    train_bags = tuple(
+        bag for bag in bundle.patch_bags if bag.image_asset_id in train_ids
+    )
+    total = len(train_bags)
+    return torch.tensor(
+        [
+            1.0
+            if (positive := sum(code in bag.class_codes for bag in train_bags)) == 0
+            else min(10.0, max(1.0, (total - positive) / positive))
+            for code in bundle.class_codes
+        ],
+        dtype=torch.float32,
+    )
 
 
 def positive_spatial_mil_loss(logits: Tensor, targets: Tensor) -> Tensor:
@@ -82,6 +104,7 @@ def overlap_consistency_loss(
 
 __all__ = [
     "absent_class_hard_negative_loss",
+    "derive_train_positive_class_weights",
     "overlap_consistency_loss",
     "positive_spatial_mil_loss",
 ]

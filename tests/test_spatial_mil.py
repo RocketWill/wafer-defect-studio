@@ -6,8 +6,14 @@ import torch.nn.functional as F
 from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.spatial_mil import (
     absent_class_hard_negative_loss,
+    derive_train_positive_class_weights,
     overlap_consistency_loss,
     positive_spatial_mil_loss,
+)
+from wafer_defect_studio.training_input_bundle import (
+    TrainingBundleSource,
+    TrainingInputBundle,
+    TrainingPatchBag,
 )
 
 
@@ -141,6 +147,60 @@ class OverlapConsistencyLossTest(unittest.TestCase):
 
         self.assertEqual(0.0, loss.item())
         self.assertTrue(torch.equal(logits.grad, torch.zeros_like(logits)))
+
+
+class TrainPositiveClassWeightsTest(unittest.TestCase):
+    def test_caps_rare_class_and_ignores_validation_and_test_labels(self) -> None:
+        bundle = _bundle(
+            ("scratch", "particle", "void"),
+            [("train", ("scratch", "particle"))]
+            + [("train", ("particle",))] * 11
+            + [("validation", ("scratch", "void")), ("test", ("scratch", "void"))],
+        )
+
+        weights = derive_train_positive_class_weights(bundle)
+
+        torch.testing.assert_close(weights, torch.tensor([10.0, 1.0, 1.0]))
+        self.assertEqual(torch.float32, weights.dtype)
+
+    def test_preserves_class_order_and_uncapped_ratio(self) -> None:
+        bundle = _bundle(
+            ("particle", "scratch"),
+            [
+                ("train", ("scratch",)),
+                ("train", ("scratch",)),
+                ("train", ("particle", "scratch")),
+                ("train", ("particle", "scratch")),
+                ("train", ("scratch",)),
+            ],
+        )
+
+        torch.testing.assert_close(
+            derive_train_positive_class_weights(bundle),
+            torch.tensor([1.5, 1.0]),
+        )
+
+
+def _bundle(
+    class_codes: tuple[str, ...],
+    rows: list[tuple[str, tuple[str, ...]]],
+) -> TrainingInputBundle:
+    sources = tuple(
+        TrainingBundleSource(f"wafer-{index}", split, "unused", "unused", "uint8")
+        for index, (split, _) in enumerate(rows)
+    )
+    bags = tuple(
+        TrainingPatchBag(
+            f"bag-{index}",
+            source.image_asset_id,
+            0,
+            0,
+            (Rect(0, 0, 1, 1),),
+            labels,
+        )
+        for index, (source, (_, labels)) in enumerate(zip(sources, rows))
+    )
+    return TrainingInputBundle("snapshot", "split", class_codes, (), sources, (), 2, bags)
 
 
 if __name__ == "__main__":
