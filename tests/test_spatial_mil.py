@@ -3,8 +3,10 @@ import unittest
 import torch
 import torch.nn.functional as F
 
+from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.spatial_mil import (
     absent_class_hard_negative_loss,
+    overlap_consistency_loss,
     positive_spatial_mil_loss,
 )
 
@@ -99,6 +101,42 @@ class AbsentClassHardNegativeLossTest(unittest.TestCase):
         targets = torch.ones(2, 3, dtype=torch.int64)
 
         loss = absent_class_hard_negative_loss(logits, targets)
+        loss.backward()
+
+        self.assertEqual(0.0, loss.item())
+        self.assertTrue(torch.equal(logits.grad, torch.zeros_like(logits)))
+
+
+class OverlapConsistencyLossTest(unittest.TestCase):
+    def test_averages_squared_probability_difference_in_source_overlap(self) -> None:
+        logits = torch.stack(
+            [
+                torch.zeros(1, 2, 2),
+                torch.full((1, 2, 2), torch.log(torch.tensor(3.0))),
+            ]
+        ).requires_grad_()
+
+        loss = overlap_consistency_loss(
+            logits,
+            [Rect(0, 0, 2, 2), Rect(1, 0, 2, 2)],
+            feature_stride=1,
+        )
+
+        torch.testing.assert_close(loss, torch.tensor(0.0625))
+        loss.backward()
+        self.assertTrue(torch.equal(logits.grad[0, :, :, 0], torch.zeros(1, 2)))
+        self.assertTrue(torch.all(logits.grad[0, :, :, 1] < 0.0))
+        self.assertTrue(torch.all(logits.grad[1, :, :, 0] > 0.0))
+        self.assertTrue(torch.equal(logits.grad[1, :, :, 1], torch.zeros(1, 2)))
+
+    def test_disjoint_patches_return_autograd_connected_zero(self) -> None:
+        logits = torch.randn(2, 1, 2, 2, requires_grad=True)
+
+        loss = overlap_consistency_loss(
+            logits,
+            [Rect(0, 0, 2, 2), Rect(2, 0, 2, 2)],
+            feature_stride=1,
+        )
         loss.backward()
 
         self.assertEqual(0.0, loss.item())
