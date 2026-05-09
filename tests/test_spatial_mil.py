@@ -18,6 +18,12 @@ from wafer_defect_studio.training_input_bundle import (
 
 
 class PositiveSpatialMilLossTest(unittest.TestCase):
+    def test_pools_a_5d_bag_and_applies_class_weights(self) -> None:
+        logits = torch.tensor([[[[[1.0]], [[2.0]]], [[[3.0]], [[-4.0]]]]])
+        targets = torch.tensor([[1, 1]])
+        loss = positive_spatial_mil_loss(logits, targets, torch.tensor([2.0, 1.0]))
+        expected = torch.stack((2 * F.softplus(torch.tensor(-3.0)), F.softplus(torch.tensor(-2.0)))).mean()
+        torch.testing.assert_close(loss, expected)
     def test_averages_positive_class_max_logit_losses(self) -> None:
         logits = torch.tensor(
             [
@@ -66,6 +72,10 @@ class PositiveSpatialMilLossTest(unittest.TestCase):
 
 
 class AbsentClassHardNegativeLossTest(unittest.TestCase):
+    def test_pools_patch_and_spatial_dimensions_for_5d_bags(self) -> None:
+        logits = torch.tensor([[[[[1.0]], [[2.0]]], [[[3.0]], [[-4.0]]]]])
+        loss = absent_class_hard_negative_loss(logits, torch.tensor([[0, 1]]))
+        torch.testing.assert_close(loss, F.softplus(torch.tensor(3.0)))
     def test_averages_absent_class_max_logit_losses(self) -> None:
         logits = torch.tensor(
             [

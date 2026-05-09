@@ -31,19 +31,34 @@ def derive_train_positive_class_weights(bundle: TrainingInputBundle) -> Tensor:
     )
 
 
-def positive_spatial_mil_loss(logits: Tensor, targets: Tensor) -> Tensor:
+def _bag_max_logits(logits: Tensor) -> Tensor:
+    if logits.ndim == 4:
+        return torch.amax(logits, dim=(-2, -1))
+    if logits.ndim == 5:
+        return torch.amax(logits, dim=(1, -2, -1))
+    raise ValueError("logits must be a 4D patch tensor or 5D bag tensor")
+
+
+def positive_spatial_mil_loss(
+    logits: Tensor,
+    targets: Tensor,
+    class_weights: Tensor | None = None,
+) -> Tensor:
     """Reward one strong spatial response for each present class."""
 
-    positive_logits = torch.amax(logits, dim=(-2, -1))[targets == 1]
+    losses = F.softplus(-_bag_max_logits(logits))
+    if class_weights is not None:
+        losses = losses * class_weights.to(device=logits.device, dtype=logits.dtype)
+    positive_logits = losses[targets == 1]
     if positive_logits.numel() == 0:
         return logits.sum() * 0.0
-    return F.softplus(-positive_logits).mean()
+    return positive_logits.mean()
 
 
 def absent_class_hard_negative_loss(logits: Tensor, targets: Tensor) -> Tensor:
     """Penalize the strongest spatial response for each absent class."""
 
-    absent_logits = torch.amax(logits, dim=(-2, -1))[targets == 0]
+    absent_logits = _bag_max_logits(logits)[targets == 0]
     if absent_logits.numel() == 0:
         return logits.sum() * 0.0
     return F.softplus(absent_logits).mean()

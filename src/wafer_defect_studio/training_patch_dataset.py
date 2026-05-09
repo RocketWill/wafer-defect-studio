@@ -159,7 +159,13 @@ class ClassAwareEqualShapeBatchSampler(Sampler[list[int]]):
         return (self._epoch_size + self._batch_size - 1) // self._batch_size
 
 
-class TrainingPatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+PatchDatasetItem = (
+    tuple[torch.Tensor, torch.Tensor]
+    | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+)
+
+
+class TrainingPatchDataset(Dataset[PatchDatasetItem]):
     """Read one deterministic split from a value-only bundle."""
 
     def __init__(
@@ -168,6 +174,7 @@ class TrainingPatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         split: str,
         *,
         augmentation: AugmentationConfig | None = None,
+        include_patch_rects: bool = False,
     ) -> None:
         if not isinstance(bundle, TrainingInputBundle):
             raise TrainingPatchDatasetError("bundle must be a TrainingInputBundle")
@@ -178,6 +185,7 @@ class TrainingPatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         if augmentation is not None and not isinstance(augmentation, AugmentationConfig):
             raise TrainingPatchDatasetError("augmentation must be an AugmentationConfig value")
         self._augmentation = augmentation
+        self._include_patch_rects = include_patch_rects
         self._sources = {
             source.image_asset_id: source
             for source in bundle.sources
@@ -219,7 +227,16 @@ class TrainingPatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
             for bag in self._items
         )
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+    @property
+    def bag_target_keys(self) -> tuple[tuple[int, ...], ...] | None:
+        if self._bundle.version != 2:
+            return None
+        return tuple(
+            tuple(int(code in bag.class_codes) for code in self._bundle.class_codes)
+            for bag in self._items
+        )
+
+    def __getitem__(self, index: int) -> PatchDatasetItem:
         item = self._items[index]
         source = self._sources[item.image_asset_id]
         pixels = self._load_pixels(source)
@@ -259,6 +276,12 @@ class TrainingPatchDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
             [int(code in item.class_codes) for code in self._bundle.class_codes],
             dtype=torch.float32,
         )
+        if self._include_patch_rects and self._bundle.version == 2:
+            rects = torch.tensor(
+                [(rect.x, rect.y, rect.width, rect.height) for rect in item.patches],
+                dtype=torch.int64,
+            )
+            return output, target, rects
         return output, target
 
     def _load_pixels(self, source: TrainingBundleSource) -> np.ndarray:

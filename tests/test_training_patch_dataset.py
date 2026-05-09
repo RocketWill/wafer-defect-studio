@@ -19,6 +19,28 @@ from wafer_defect_studio.training_patch_dataset import TrainingPatchDataset
 
 
 class TrainingPatchDatasetTest(unittest.TestCase):
+    def test_v4_view_exposes_target_keys_and_patch_rects(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "source.png"
+            image = QImage(2, 1, QImage.Format.Format_Grayscale8)
+            self.assertTrue(image.save(str(path), "PNG"))
+            bundle = TrainingInputBundle(
+                "snapshot", "split", ("scratch", "particle"),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                (TrainingBundleSource("wafer", "train", str(path), _hash(path), "uint8"),),
+                (), 2,
+                (TrainingPatchBag("bag", "wafer", 0, 0, (Rect(0, 0, 1, 1), Rect(1, 0, 1, 1)), ("particle",)),),
+            )
+            legacy = TrainingPatchDataset(bundle, "train")
+            spatial = TrainingPatchDataset(bundle, "train", include_patch_rects=True)
+
+            self.assertEqual(spatial.bag_target_keys, ((0, 1),))
+            self.assertEqual(len(legacy[0]), 2)
+            inputs, target, rects = spatial[0]
+            self.assertEqual(tuple(inputs.shape), (2, 3, 1, 1))
+            torch.testing.assert_close(target, torch.tensor([0.0, 1.0]))
+            torch.testing.assert_close(rects, torch.tensor([[0, 0, 1, 1], [1, 0, 1, 1]]))
+
     def test_v2_bag_returns_ordered_patch_stack_and_train_only_augmentation(self):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "source.png"

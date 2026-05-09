@@ -23,9 +23,25 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 
-from .model_registry import create_resnet18, max_pool_patch_logits, resolve_device
+from .detection_windows import Rect
+from .model_registry import (
+    create_resnet18,
+    create_resnet18_spatial_logits,
+    max_pool_patch_logits,
+    resolve_device,
+)
+from .spatial_mil import (
+    absent_class_hard_negative_loss,
+    derive_train_positive_class_weights,
+    overlap_consistency_loss,
+    positive_spatial_mil_loss,
+)
 from .training_input_bundle import TrainingInputBundle
-from .training_patch_dataset import EqualShapeBatchSampler, TrainingPatchDataset
+from .training_patch_dataset import (
+    ClassAwareEqualShapeBatchSampler,
+    EqualShapeBatchSampler,
+    TrainingPatchDataset,
+)
 from .training_protocol import (
     ProgressMessage,
     TerminalMessage,
@@ -54,6 +70,20 @@ def create_training_data_loader(
 
     shape_keys = dataset.bag_shape_keys
     if shape_keys is not None:
+        if config.training_policy == "spatial_mil_v4":
+            target_keys = dataset.bag_target_keys
+            if target_keys is None:
+                raise RuntimeError("spatial_mil_v4 loader requires v2 Patch Bag targets")
+            return DataLoader(
+                dataset,
+                batch_sampler=ClassAwareEqualShapeBatchSampler(
+                    shape_keys,
+                    target_keys,
+                    batch_size=config.batch_size,
+                    seed=config.seed,
+                ),
+                num_workers=0,
+            )
         return DataLoader(
             dataset,
             batch_sampler=EqualShapeBatchSampler(
@@ -185,6 +215,17 @@ def run_worker(
                 raise RuntimeError("training input bundle does not match the requested snapshot/split")
             if len(bundle.class_codes) != config.class_count:
                 raise RuntimeError("training input bundle class count does not match the request")
+            if config.training_policy == "spatial_mil_v4" and bundle.version != 2:
+                raise RuntimeError(
+                    f"spatial_mil_v4 requires bundle version 2; received version {bundle.version}"
+                )
+            if (
+                config.training_policy == "spatial_mil_v4"
+                and config.patch_size % 4 != 0
+            ):
+                raise RuntimeError(
+                    f"spatial_mil_v4 patch_size must be divisible by feature stride 4; received {config.patch_size}"
+                )
             if bundle.version == 1:
                 sample_sizes = {(sample.width, sample.height) for sample in bundle.samples}
                 if len(sample_sizes) != 1:
@@ -203,16 +244,32 @@ def run_worker(
                     raise RuntimeError(
                         "Patch Bag descriptors do not match the configured patch_size"
                     )
-            dataset = TrainingPatchDataset(bundle, "train")
+            dataset = TrainingPatchDataset(
+                bundle,
+                "train",
+                include_patch_rects=config.training_policy == "spatial_mil_v4",
+            )
             loader = create_training_data_loader(
                 dataset,
                 config,
                 split="train",
             )
-        model = create_resnet18(
-            config.class_count,
-            weights=config.weights_policy,
-            device=device,
+        if config.training_policy == "spatial_mil_v4" and bundle is None:
+            raise RuntimeError(
+                "spatial_mil_v4 requires a v2 Training Input Bundle"
+            )
+        model = (
+            create_resnet18_spatial_logits(
+                config.class_count,
+                weights=config.weights_policy,
+                device=device,
+            )
+            if config.training_policy == "spatial_mil_v4"
+            else create_resnet18(
+                config.class_count,
+                weights=config.weights_policy,
+                device=device,
+            )
         )
         if bundle is None:
             _freeze_backbone(model)
@@ -234,14 +291,25 @@ def run_worker(
             total_steps = config.epochs * len(loader)
         started = time.monotonic()
         step_number = 0
+        positive_class_weights = (
+            derive_train_positive_class_weights(bundle).to(device)
+            if bundle is not None and config.training_policy == "spatial_mil_v4"
+            else None
+        )
 
         for epoch in range(1, config.epochs + 1):
+            if loader is not None and config.training_policy == "spatial_mil_v4":
+                loader.batch_sampler.set_epoch(epoch - 1)
             batches = (
                 loader
                 if loader is not None
                 else ((synthetic_inputs, synthetic_targets) for _ in range(synthetic_steps))
             )
-            for inputs, targets in batches:
+            for batch in batches:
+                if config.training_policy == "spatial_mil_v4":
+                    inputs, targets, patch_rect_values = batch
+                else:
+                    inputs, targets = batch
                 step_number += 1
                 if _is_cancelled(cancel_event):
                     _emit_cancelled(output_queue, request_value, config, log_lines)
@@ -261,15 +329,44 @@ def run_worker(
                     model.train() if effective_batch_size > 1 else model.eval()
                     inputs = inputs.to(device)
                     targets = targets.to(device)
-                if inputs.ndim == 5:
+                if config.training_policy == "spatial_mil_v4":
+                    batch_size, patch_count, channels, height, width = inputs.shape
+                    raw_logits = model(
+                        inputs.reshape(batch_size * patch_count, channels, height, width)
+                    )
+                    feature_height, feature_width = raw_logits.shape[-2:]
+                    logits = raw_logits.reshape(
+                        batch_size,
+                        patch_count,
+                        config.class_count,
+                        feature_height,
+                        feature_width,
+                    )
+                    positive_loss = positive_spatial_mil_loss(
+                        logits, targets, positive_class_weights
+                    )
+                    absent_loss = absent_class_hard_negative_loss(logits, targets)
+                    overlap_loss = torch.stack(
+                        [
+                            overlap_consistency_loss(
+                                bag_logits,
+                                [Rect(*map(int, values)) for values in bag_rects.tolist()],
+                                feature_stride=4,
+                            )
+                            for bag_logits, bag_rects in zip(logits, patch_rect_values, strict=True)
+                        ]
+                    ).mean()
+                    loss = positive_loss + absent_loss + overlap_loss
+                elif inputs.ndim == 5:
                     batch_size, patch_count, channels, height, width = inputs.shape
                     patch_logits = model(
                         inputs.reshape(batch_size * patch_count, channels, height, width)
                     ).reshape(batch_size, patch_count, config.class_count)
                     logits = max_pool_patch_logits(patch_logits)
+                    loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
                 else:
                     logits = model(inputs)
-                loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
+                    loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
                 loss.backward()
                 optimizer.step()
                 loss_value = float(loss.detach().cpu().item())
@@ -424,14 +521,17 @@ def _write_staged_artifacts(
     *,
     bundle: TrainingInputBundle | None = None,
 ) -> None:
+    spatial_v4 = bundle is not None and config.training_policy == "spatial_mil_v4"
     checkpoint = {
         "checkpoint_format": (
-            _CHECKPOINT_FORMAT_V3
+            "wafer_defect_studio.resnet18.v4"
+            if spatial_v4
+            else _CHECKPOINT_FORMAT_V3
             if bundle is not None and bundle.version == 2
             else _CHECKPOINT_FORMAT_V2
         ),
-        "architecture": "resnet18",
-        "feature_stride": 16,
+        "architecture": "resnet18_spatial_logits" if spatial_v4 else "resnet18",
+        "feature_stride": 4 if spatial_v4 else 16,
         "class_count": config.class_count,
         "class_codes": list(bundle.class_codes) if bundle is not None else [
             f"class-{index}" for index in range(config.class_count)
@@ -464,7 +564,25 @@ def _write_staged_artifacts(
             for name, value in model.state_dict().items()
         },
     }
-    if bundle is not None and bundle.version == 2:
+    if spatial_v4:
+        checkpoint.update(
+            {
+                "patch_size": config.patch_size,
+                "patch_stride": config.patch_stride,
+                "training_policy": "spatial_mil_v4",
+                "loss_weights": {
+                    "positive_spatial_mil": 1.0,
+                    "absent_class_hard_negative": 1.0,
+                    "overlap_consistency": 1.0,
+                },
+                "positive_class_weighting": {
+                    "formula": "negative_bag_count / positive_bag_count",
+                    "minimum": 1.0,
+                    "maximum": 10.0,
+                },
+            }
+        )
+    elif bundle is not None and bundle.version == 2:
         checkpoint.update(
             {
                 "patch_size": config.patch_size,
