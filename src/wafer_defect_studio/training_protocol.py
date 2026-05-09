@@ -65,6 +65,7 @@ class TrainingConfig(_VersionedMessage):
     weights_policy: str = "none"
     patch_size: int | None = None
     patch_stride: int | None = None
+    training_policy: str = "legacy"
 
     def __post_init__(self) -> None:
         for name in ("snapshot_id", "split_id", "architecture", "device", "weights_policy"):
@@ -73,6 +74,10 @@ class TrainingConfig(_VersionedMessage):
             raise TrainingProtocolError("only the resnet18 architecture is supported")
         if self.weights_policy not in {"none", "imagenet"}:
             raise TrainingProtocolError("weights_policy must be 'none' or 'imagenet'")
+        if self.training_policy not in {"legacy", "spatial_mil_v4"}:
+            raise TrainingProtocolError(
+                "training_policy must be 'legacy' or 'spatial_mil_v4'"
+            )
         for name in ("class_count", "epochs", "batch_size"):
             _require_positive_int(getattr(self, name), name)
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
@@ -93,6 +98,8 @@ class TrainingConfig(_VersionedMessage):
             _require_positive_int(self.patch_stride, "patch_stride")
             if self.patch_stride > self.patch_size:
                 raise TrainingProtocolError("patch_stride cannot exceed patch_size")
+        if self.training_policy == "spatial_mil_v4" and self.patch_size is None:
+            raise TrainingProtocolError("spatial_mil_v4 requires patch geometry")
 
     def validate_patch_geometry(self, sample_width: int, sample_height: int) -> None:
         """Reject configured Model Patches that cannot fit one frozen Grid sample."""
@@ -121,17 +128,21 @@ class TrainingConfig(_VersionedMessage):
             "weights_policy": self.weights_policy,
             "patch_size": self.patch_size,
             "patch_stride": self.patch_stride,
+            "training_policy": self.training_policy,
         }
 
     @classmethod
     def from_dict(cls, value: Any) -> "TrainingConfig":
         _require_object(value, "config")
         expected = {item.name for item in fields(cls)}
-        legacy = expected - {"patch_size", "patch_stride"}
-        if set(value) == legacy:
+        supplied = set(value)
+        if "training_policy" not in supplied:
+            value = {**value, "training_policy": "legacy"}
+            supplied.add("training_policy")
+        if "patch_size" not in supplied and "patch_stride" not in supplied:
             value = {**value, "patch_size": None, "patch_stride": None}
-        else:
-            _require_keys(value, expected, "config")
+            supplied.update(("patch_size", "patch_stride"))
+        _require_keys(value, expected, "config")
         try:
             return cls(**value)
         except (TypeError, ValueError) as error:

@@ -48,7 +48,30 @@ class TrainingProtocolTest(unittest.TestCase):
         legacy_payload = config.to_dict()
         legacy_payload.pop("patch_size")
         legacy_payload.pop("patch_stride")
+        legacy_payload.pop("training_policy")
         self.assertIsNone(TrainingConfig.from_dict(legacy_payload).patch_size)
+        self.assertEqual(TrainingConfig.from_dict(legacy_payload).training_policy, "legacy")
+
+        spatial = TrainingConfig(
+            snapshot_id="snapshot-1",
+            split_id="split-1",
+            class_count=2,
+            epochs=3,
+            batch_size=4,
+            training_policy="spatial_mil_v4",
+            patch_size=128,
+            patch_stride=64,
+        )
+        self.assertEqual(TrainingConfig.from_json(spatial.to_json()), spatial)
+        with self.assertRaisesRegex(TrainingProtocolError, "requires patch geometry"):
+            TrainingConfig(
+                snapshot_id="snapshot-1",
+                split_id="split-1",
+                class_count=2,
+                epochs=3,
+                batch_size=4,
+                training_policy="spatial_mil_v4",
+            )
 
         for patch_size, patch_stride, error in (
             (0, 64, "patch_size must be a positive integer"),

@@ -51,6 +51,7 @@ _CHECKPOINT_NAME = "model.pt"
 _CHECKPOINT_FORMAT_V1 = "wafer_defect_studio.resnet18.v1"
 _CHECKPOINT_FORMAT_V2 = "wafer_defect_studio.resnet18.v2"
 _CHECKPOINT_FORMAT_V3 = "wafer_defect_studio.resnet18.v3"
+_CHECKPOINT_FORMAT_V4 = "wafer_defect_studio.resnet18.v4"
 _IMMUTABLE_COLUMNS = (
     "run_id",
     "created_at",
@@ -84,6 +85,7 @@ class RunConfig:
     patch_size: int | None = None
     patch_stride: int | None = None
     bag_pooling: str | None = None
+    training_policy: str = "legacy"
 
     def __post_init__(self) -> None:
         for name in ("snapshot_id", "split_id", "architecture", "device", "weights_policy"):
@@ -92,6 +94,10 @@ class RunConfig:
             raise TrainingRunError("only the resnet18 architecture is supported")
         if self.weights_policy not in {"none", "imagenet"}:
             raise TrainingRunError("weights_policy must be 'none' or 'imagenet'")
+        if self.training_policy not in {"legacy", "spatial_mil_v4"}:
+            raise TrainingRunError(
+                "training_policy must be 'legacy' or 'spatial_mil_v4'"
+            )
         for name in ("class_count", "batch_size", "epochs"):
             _require_positive_int(getattr(self, name), name)
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
@@ -104,7 +110,7 @@ class RunConfig:
             raise TrainingRunError("learning_rate must be a positive number")
         _json_mapping(self.augmentation, "augmentation")
         object.__setattr__(self, "augmentation", dict(self.augmentation))
-        patch_values = (self.patch_size, self.patch_stride, self.bag_pooling)
+        patch_values = (self.patch_size, self.patch_stride)
         if any(value is not None for value in patch_values):
             if self.patch_size is None or self.patch_stride is None:
                 raise TrainingRunError(
@@ -114,8 +120,16 @@ class RunConfig:
             _require_positive_int(self.patch_stride, "patch_stride")
             if self.patch_stride > self.patch_size:
                 raise TrainingRunError("patch_stride cannot exceed patch_size")
-            if self.bag_pooling != "max":
+            if self.training_policy == "legacy" and self.bag_pooling != "max":
                 raise TrainingRunError("bag_pooling must be max for Patch Classification")
+        if self.training_policy == "spatial_mil_v4" and self.patch_size is None:
+            raise TrainingRunError("spatial_mil_v4 requires patch geometry")
+        if self.training_policy == "spatial_mil_v4" and self.bag_pooling is not None:
+            raise TrainingRunError("spatial_mil_v4 bag_pooling must be null")
+        if self.training_policy == "legacy" and self.patch_size is None and self.bag_pooling is not None:
+            raise TrainingRunError(
+                "patch_size and patch_stride must be provided with bag_pooling"
+            )
 
     @property
     def model_config(self) -> dict[str, Any]:
@@ -128,6 +142,7 @@ class RunConfig:
             "patch_size": self.patch_size,
             "patch_stride": self.patch_stride,
             "bag_pooling": self.bag_pooling,
+            "training_policy": self.training_policy,
         }
 
     @property
@@ -532,6 +547,7 @@ def validate_project_checkpoint(
         _CHECKPOINT_FORMAT_V1,
         _CHECKPOINT_FORMAT_V2,
         _CHECKPOINT_FORMAT_V3,
+        _CHECKPOINT_FORMAT_V4,
     }:
         raise TrainingRunError("unsupported project checkpoint format")
     if value["checkpoint_format"] in {_CHECKPOINT_FORMAT_V2, _CHECKPOINT_FORMAT_V3}:
@@ -549,8 +565,46 @@ def validate_project_checkpoint(
             )
         if value.get("bag_pooling") != "max":
             raise TrainingRunError("resnet18.v3 checkpoint bag_pooling must be max")
-    if value["architecture"] != "resnet18":
-        raise TrainingRunError("project checkpoint architecture must be resnet18")
+    if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V4:
+        if value.get("feature_stride") != 4:
+            raise TrainingRunError("resnet18.v4 checkpoint feature_stride must be 4")
+        for name in ("patch_size", "patch_stride"):
+            item = value.get(name)
+            if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+                raise TrainingRunError(
+                    f"resnet18.v4 checkpoint {name} must be a positive integer"
+                )
+        if value["patch_stride"] > value["patch_size"]:
+            raise TrainingRunError(
+                "resnet18.v4 checkpoint patch_stride cannot exceed patch_size"
+            )
+        if value.get("training_policy") != "spatial_mil_v4":
+            raise TrainingRunError(
+                "resnet18.v4 checkpoint training_policy must be spatial_mil_v4"
+            )
+        if value.get("loss_weights") != {
+            "positive_spatial_mil": 1.0,
+            "absent_class_hard_negative": 1.0,
+            "overlap_consistency": 1.0,
+        }:
+            raise TrainingRunError("resnet18.v4 checkpoint loss_weights are invalid")
+        if value.get("positive_class_weighting") != {
+            "formula": "negative_bag_count / positive_bag_count",
+            "minimum": 1.0,
+            "maximum": 10.0,
+        }:
+            raise TrainingRunError(
+                "resnet18.v4 checkpoint positive_class_weighting is invalid"
+            )
+    expected_architecture = (
+        "resnet18_spatial_logits"
+        if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V4
+        else "resnet18"
+    )
+    if value["architecture"] != expected_architecture:
+        raise TrainingRunError(
+            f"project checkpoint architecture must be {expected_architecture}"
+        )
     class_codes = value["class_codes"]
     if (
         not isinstance(class_codes, (list, tuple))

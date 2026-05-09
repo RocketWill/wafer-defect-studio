@@ -38,6 +38,7 @@ from wafer_defect_studio.training_run import (
 class TrainingRunTest(unittest.TestCase):
     def test_run_config_requires_complete_patch_classification_geometry(self):
         legacy = RunConfig("snapshot-1", "split-1")
+        self.assertEqual(legacy.training_policy, "legacy")
         self.assertEqual(
             (legacy.patch_size, legacy.patch_stride, legacy.bag_pooling),
             (None, None, None),
@@ -55,6 +56,7 @@ class TrainingRunTest(unittest.TestCase):
         )
         for values, message in (
             ({"patch_size": 128}, "provided together"),
+            ({"bag_pooling": "max"}, "provided with bag_pooling"),
             ({"patch_size": 128, "patch_stride": 64}, "bag_pooling must be max"),
             (
                 {"patch_size": 128, "patch_stride": 129, "bag_pooling": "max"},
@@ -67,6 +69,119 @@ class TrainingRunTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(TrainingRunError, message):
                 RunConfig("snapshot-1", "split-1", **values)
+
+    def test_spatial_mil_v4_config_and_checkpoint_metadata_are_frozen(self):
+        config = RunConfig(
+            "snapshot-1",
+            "split-1",
+            training_policy="spatial_mil_v4",
+            patch_size=128,
+            patch_stride=64,
+        )
+        self.assertEqual(config.model_config["training_policy"], "spatial_mil_v4")
+        self.assertIsNone(config.model_config["bag_pooling"])
+        with self.assertRaisesRegex(TrainingRunError, "requires patch geometry"):
+            RunConfig("snapshot-1", "split-1", training_policy="spatial_mil_v4")
+        with self.assertRaisesRegex(TrainingRunError, "bag_pooling must be null"):
+            RunConfig(
+                "snapshot-1",
+                "split-1",
+                training_policy="spatial_mil_v4",
+                patch_size=128,
+                patch_stride=64,
+                bag_pooling="max",
+            )
+
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "model.pt"
+            checkpoint = {
+                "checkpoint_format": "wafer_defect_studio.resnet18.v4",
+                "architecture": "resnet18_spatial_logits",
+                "feature_stride": 4,
+                "training_policy": "spatial_mil_v4",
+                "patch_size": 128,
+                "patch_stride": 64,
+                "loss_weights": {
+                    "positive_spatial_mil": 1.0,
+                    "absent_class_hard_negative": 1.0,
+                    "overlap_consistency": 1.0,
+                },
+                "positive_class_weighting": {
+                    "formula": "negative_bag_count / positive_bag_count",
+                    "minimum": 1.0,
+                    "maximum": 10.0,
+                },
+                "class_count": 1,
+                "class_codes": ["scratch"],
+                "normalization_bounds": [{
+                    "dtype": "uint8", "source_min": 0, "source_max": 255,
+                    "low": 0.0, "high": 255.0,
+                    "low_percentile": 1.0, "high_percentile": 99.0,
+                }],
+                "input_size": {"width": 128, "height": 128},
+                "state_dict": {"dummy": torch.zeros(1)},
+            }
+            torch.save(checkpoint, path)
+            self.assertEqual(validate_project_checkpoint(path), checkpoint)
+            tampered = (
+                ({"architecture": "resnet18"}, "architecture"),
+                ({"feature_stride": 16}, "feature_stride"),
+                ({"training_policy": "legacy"}, "training_policy"),
+                ({"patch_size": 0}, "patch_size"),
+                ({"patch_stride": 0}, "patch_stride"),
+                ({"patch_size": 32, "patch_stride": 64}, "cannot exceed"),
+            )
+            for changes, message in tampered:
+                invalid = {**checkpoint, **changes}
+                torch.save(invalid, path)
+                with self.assertRaisesRegex(TrainingRunError, message):
+                    validate_project_checkpoint(path)
+            for name in checkpoint["loss_weights"]:
+                invalid = {**checkpoint, "loss_weights": {**checkpoint["loss_weights"], name: 0.5}}
+                torch.save(invalid, path)
+                with self.assertRaisesRegex(TrainingRunError, "loss_weights"):
+                    validate_project_checkpoint(path)
+            for name, value in (("formula", "P / N"), ("minimum", 0.0), ("maximum", 5.0)):
+                invalid = {
+                    **checkpoint,
+                    "positive_class_weighting": {
+                        **checkpoint["positive_class_weighting"],
+                        name: value,
+                    },
+                }
+                torch.save(invalid, path)
+                with self.assertRaisesRegex(TrainingRunError, "positive_class_weighting"):
+                    validate_project_checkpoint(path)
+
+    def test_load_old_persisted_config_defaults_training_policy_to_legacy(self):
+        with TemporaryDirectory() as temporary_directory:
+            project_path = Path(temporary_directory) / "project"
+            _prepare_training_project(project_path)
+            run = create_training_run(
+                project_path,
+                RunConfig("snapshot-1", "split-1"),
+                run_id="old-config",
+            )
+            database_path = project_path / "project.sqlite"
+            connection = sqlite3.connect(database_path)
+            try:
+                connection.execute("DROP TRIGGER training_runs_no_immutable_update")
+                payload = json.loads(connection.execute(
+                    "SELECT config_json FROM training_runs WHERE run_id = ?",
+                    (run.run_id,),
+                ).fetchone()[0])
+                payload.pop("training_policy")
+                connection.execute(
+                    "UPDATE training_runs SET config_json = ? WHERE run_id = ?",
+                    (json.dumps(payload), run.run_id),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            self.assertEqual(
+                load_training_run(project_path, run.run_id).config.training_policy,
+                "legacy",
+            )
 
     def test_project_checkpoint_contract_rejects_incomplete_preprocessing(self):
         with TemporaryDirectory() as temporary_directory:
