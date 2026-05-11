@@ -11,7 +11,11 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from .training_augmentation import AugmentationConfig, apply_augmentation
+from .training_augmentation import (
+    AugmentationConfig,
+    apply_augmentation,
+    apply_spatial_mil_v4_augmentation,
+)
 from .training_dataset import extract_model_patch
 from .training_input_bundle import TrainingInputBundle, TrainingBundleSource
 from .wafer_view import _decode_wafer_image
@@ -175,6 +179,7 @@ class TrainingPatchDataset(Dataset[PatchDatasetItem]):
         *,
         augmentation: AugmentationConfig | None = None,
         include_patch_rects: bool = False,
+        spatial_mil_v4_seed: int | None = None,
     ) -> None:
         if not isinstance(bundle, TrainingInputBundle):
             raise TrainingPatchDatasetError("bundle must be a TrainingInputBundle")
@@ -184,8 +189,15 @@ class TrainingPatchDataset(Dataset[PatchDatasetItem]):
         self._split = split
         if augmentation is not None and not isinstance(augmentation, AugmentationConfig):
             raise TrainingPatchDatasetError("augmentation must be an AugmentationConfig value")
+        if (
+            spatial_mil_v4_seed is not None
+            and (isinstance(spatial_mil_v4_seed, bool) or not isinstance(spatial_mil_v4_seed, int))
+        ):
+            raise TrainingPatchDatasetError("spatial_mil_v4_seed must be an integer")
         self._augmentation = augmentation
         self._include_patch_rects = include_patch_rects
+        self._spatial_mil_v4_seed = spatial_mil_v4_seed
+        self._epoch = 0
         self._sources = {
             source.image_asset_id: source
             for source in bundle.sources
@@ -210,6 +222,11 @@ class TrainingPatchDataset(Dataset[PatchDatasetItem]):
 
     def __len__(self) -> int:
         return len(self._items)
+
+    def set_epoch(self, epoch: int) -> None:
+        if isinstance(epoch, bool) or not isinstance(epoch, int):
+            raise TrainingPatchDatasetError("epoch must be an integer")
+        self._epoch = epoch
 
     @property
     def bag_shape_keys(self) -> tuple[tuple[int, ...], ...] | None:
@@ -259,6 +276,12 @@ class TrainingPatchDataset(Dataset[PatchDatasetItem]):
             if self._split == "train" and self._augmentation is not None:
                 patches = tuple(
                     apply_augmentation(patch, self._augmentation)
+                    for patch in patches
+                )
+            if self._split == "train" and self._spatial_mil_v4_seed is not None:
+                effective_seed = self._spatial_mil_v4_seed + self._epoch * 1_000_003 + index
+                patches = tuple(
+                    apply_spatial_mil_v4_augmentation(patch, effective_seed=effective_seed)
                     for patch in patches
                 )
             output = torch.stack(patches)

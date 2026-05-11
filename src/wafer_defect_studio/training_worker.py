@@ -37,6 +37,7 @@ from .spatial_mil import (
     positive_spatial_mil_loss,
 )
 from .training_input_bundle import TrainingInputBundle
+from .training_augmentation import SPATIAL_MIL_V4_AUGMENTATION_POLICY
 from .training_patch_dataset import (
     ClassAwareEqualShapeBatchSampler,
     EqualShapeBatchSampler,
@@ -248,6 +249,9 @@ def run_worker(
                 bundle,
                 "train",
                 include_patch_rects=config.training_policy == "spatial_mil_v4",
+                spatial_mil_v4_seed=(
+                    config.seed if config.training_policy == "spatial_mil_v4" else None
+                ),
             )
             loader = create_training_data_loader(
                 dataset,
@@ -300,6 +304,7 @@ def run_worker(
         for epoch in range(1, config.epochs + 1):
             if loader is not None and config.training_policy == "spatial_mil_v4":
                 loader.batch_sampler.set_epoch(epoch - 1)
+                loader.dataset.set_epoch(epoch - 1)
             batches = (
                 loader
                 if loader is not None
@@ -579,6 +584,10 @@ def _write_staged_artifacts(
                     "formula": "negative_bag_count / positive_bag_count",
                     "minimum": 1.0,
                     "maximum": 10.0,
+                },
+                "augmentation_policy": {
+                    **SPATIAL_MIL_V4_AUGMENTATION_POLICY,
+                    "seed": config.seed,
                 },
             }
         )

@@ -9,6 +9,15 @@ import torch
 from torch import Tensor
 
 
+SPATIAL_MIL_V4_AUGMENTATION_POLICY = {
+    "name": "spatial_mil_v4_defect_preserving_affine",
+    "contrast": [0.9, 1.1],
+    "brightness": [-0.03, 0.03],
+    "seed": "run_seed",
+    "seed_formula": "run_seed + epoch * 1_000_003 + bag_index",
+}
+
+
 class TrainingAugmentationError(ValueError):
     """Raised when a transform configuration or sample is invalid."""
 
@@ -93,6 +102,17 @@ def apply_augmentation(
     return result
 
 
+def apply_spatial_mil_v4_augmentation(sample: Tensor, *, effective_seed: int) -> Tensor:
+    """Apply the frozen train-only pointwise affine transform for one v4 bag."""
+
+    _validate_sample(sample)
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(effective_seed)
+    contrast = 0.9 + 0.2 * float(torch.rand((), generator=generator))
+    brightness = -0.03 + 0.06 * float(torch.rand((), generator=generator))
+    return ((sample - 0.5) * contrast + 0.5 + brightness).clamp(0.0, 1.0)
+
+
 def preview_transformed_sample(
     sample: Tensor,
     config: AugmentationConfig | None = None,
@@ -129,5 +149,7 @@ __all__ = [
     "TrainingAugmentationError",
     "TransformPreview",
     "apply_augmentation",
+    "apply_spatial_mil_v4_augmentation",
+    "SPATIAL_MIL_V4_AUGMENTATION_POLICY",
     "preview_transformed_sample",
 ]

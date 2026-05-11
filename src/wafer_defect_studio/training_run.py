@@ -596,6 +596,18 @@ def validate_project_checkpoint(
             raise TrainingRunError(
                 "resnet18.v4 checkpoint positive_class_weighting is invalid"
             )
+        augmentation_policy = value.get("augmentation_policy")
+        if not isinstance(augmentation_policy, Mapping):
+            raise TrainingRunError("resnet18.v4 checkpoint augmentation_policy is invalid")
+        seed = augmentation_policy.get("seed")
+        if augmentation_policy != {
+            "name": "spatial_mil_v4_defect_preserving_affine",
+            "contrast": [0.9, 1.1],
+            "brightness": [-0.03, 0.03],
+            "seed": seed,
+            "seed_formula": "run_seed + epoch * 1_000_003 + bag_index",
+        } or isinstance(seed, bool) or not isinstance(seed, int):
+            raise TrainingRunError("resnet18.v4 checkpoint augmentation_policy is invalid")
     expected_architecture = (
         "resnet18_spatial_logits"
         if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V4

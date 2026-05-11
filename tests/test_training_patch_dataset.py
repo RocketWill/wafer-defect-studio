@@ -19,6 +19,43 @@ from wafer_defect_studio.training_patch_dataset import TrainingPatchDataset
 
 
 class TrainingPatchDatasetTest(unittest.TestCase):
+    def test_v4_bag_affine_is_overlap_consistent_and_epoch_seeded(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "source.png"
+            image = QImage(3, 1, QImage.Format.Format_Grayscale8)
+            bits = image.bits()
+            bits[:image.bytesPerLine()] = bytes((20, 100, 220)) + bytes(image.bytesPerLine() - 3)
+            self.assertTrue(image.save(str(path), "PNG"))
+            del bits, image
+            bundle = TrainingInputBundle(
+                "snapshot", "split", ("scratch",),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                (TrainingBundleSource("wafer", "train", str(path), _hash(path), "uint8"),),
+                (), 2,
+                (
+                    TrainingPatchBag("bag-0", "wafer", 0, 0, (Rect(0, 0, 2, 1), Rect(1, 0, 2, 1)), ("scratch",)),
+                    TrainingPatchBag("bag-1", "wafer", 0, 0, (Rect(0, 0, 2, 1), Rect(1, 0, 2, 1)), ("scratch",)),
+                ),
+            )
+            dataset = TrainingPatchDataset(bundle, "train", spatial_mil_v4_seed=11)
+            first = dataset[0][0]
+            self.assertTrue(torch.equal(first[0, :, 0, 1], first[1, :, 0, 0]))
+            self.assertTrue(torch.equal(first, dataset[0][0]))
+            self.assertFalse(torch.equal(first, dataset[1][0]))
+            dataset.set_epoch(1)
+            self.assertFalse(torch.equal(first, dataset[0][0]))
+            validation_bundle = TrainingInputBundle(
+                "snapshot", "split", ("scratch",), bundle.normalization_bounds,
+                (TrainingBundleSource("wafer", "validation", str(path), _hash(path), "uint8"),),
+                (), 2,
+                (TrainingPatchBag("bag", "wafer", 0, 0, (Rect(0, 0, 2, 1), Rect(1, 0, 2, 1)), ("scratch",)),),
+            )
+            augmented_validation = TrainingPatchDataset(
+                validation_bundle, "validation", spatial_mil_v4_seed=11
+            )[0][0]
+            plain_validation = TrainingPatchDataset(validation_bundle, "validation")[0][0]
+            self.assertTrue(torch.equal(augmented_validation, plain_validation))
+
     def test_v4_view_exposes_target_keys_and_patch_rects(self):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "source.png"

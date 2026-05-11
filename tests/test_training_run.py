@@ -111,6 +111,13 @@ class TrainingRunTest(unittest.TestCase):
                     "minimum": 1.0,
                     "maximum": 10.0,
                 },
+                "augmentation_policy": {
+                    "name": "spatial_mil_v4_defect_preserving_affine",
+                    "contrast": [0.9, 1.1],
+                    "brightness": [-0.03, 0.03],
+                    "seed": 7,
+                    "seed_formula": "run_seed + epoch * 1_000_003 + bag_index",
+                },
                 "class_count": 1,
                 "class_codes": ["scratch"],
                 "normalization_bounds": [{
@@ -151,6 +158,14 @@ class TrainingRunTest(unittest.TestCase):
                 }
                 torch.save(invalid, path)
                 with self.assertRaisesRegex(TrainingRunError, "positive_class_weighting"):
+                    validate_project_checkpoint(path)
+            for name, value in (("contrast", [0.8, 1.2]), ("brightness", [-0.1, 0.1]), ("seed", True)):
+                invalid = {
+                    **checkpoint,
+                    "augmentation_policy": {**checkpoint["augmentation_policy"], name: value},
+                }
+                torch.save(invalid, path)
+                with self.assertRaisesRegex(TrainingRunError, "augmentation_policy"):
                     validate_project_checkpoint(path)
 
     def test_load_old_persisted_config_defaults_training_policy_to_legacy(self):

@@ -243,13 +243,21 @@ class TrainingWorkerTest(unittest.TestCase):
             torch.manual_seed(7)
             epochs = []
             original_set_epoch = ClassAwareEqualShapeBatchSampler.set_epoch
+            original_dataset_set_epoch = TrainingPatchDataset.set_epoch
+            dataset_epochs = []
 
             def record_epoch(sampler, epoch):
                 epochs.append(epoch)
                 return original_set_epoch(sampler, epoch)
 
+            def record_dataset_epoch(dataset, epoch):
+                dataset_epochs.append(epoch)
+                return original_dataset_set_epoch(dataset, epoch)
+
             with mock.patch.object(
                 ClassAwareEqualShapeBatchSampler, "set_epoch", record_epoch
+            ), mock.patch.object(
+                TrainingPatchDataset, "set_epoch", record_dataset_epoch
             ), mock.patch(
                 "wafer_defect_studio.training_worker.positive_spatial_mil_loss",
                 wraps=positive_spatial_mil_loss,
@@ -272,6 +280,7 @@ class TrainingWorkerTest(unittest.TestCase):
             progress = [message for message in messages if isinstance(message, ProgressMessage)]
             self.assertEqual([(message.step, message.total_steps) for message in progress], [(1, 3), (2, 3), (3, 3)])
             self.assertEqual(epochs, [0])
+            self.assertEqual(dataset_epochs, [0])
             self.assertEqual(positive_loss.call_count, 3)
             self.assertEqual(absent_loss.call_count, 3)
             self.assertEqual(overlap_loss.call_count, 3)
@@ -291,6 +300,13 @@ class TrainingWorkerTest(unittest.TestCase):
                 "formula": "negative_bag_count / positive_bag_count",
                 "minimum": 1.0,
                 "maximum": 10.0,
+            })
+            self.assertEqual(checkpoint["augmentation_policy"], {
+                "name": "spatial_mil_v4_defect_preserving_affine",
+                "contrast": [0.9, 1.1],
+                "brightness": [-0.03, 0.03],
+                "seed": 7,
+                "seed_formula": "run_seed + epoch * 1_000_003 + bag_index",
             })
             self.assertIn("spatial_head.weight", checkpoint["state_dict"])
             torch.manual_seed(7)
