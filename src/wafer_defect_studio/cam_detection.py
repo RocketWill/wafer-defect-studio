@@ -205,6 +205,7 @@ def generate_all_convolutional_artifact(
     model_id: str | None = None,
     profile_id: str | None = None,
     evaluation_id: str | None = None,
+    map_method: str | None = None,
 ) -> CamDetectionArtifact:
     """Stitch trained sigmoid maps or scalar patch scores without renormalizing."""
 
@@ -242,14 +243,12 @@ def generate_all_convolutional_artifact(
         center_weight=str((window_settings or {}).get("center_weighting", "linear")),
     )
     metadata = _provenance(provenance, model_id, profile_id, evaluation_id)
-    map_method = (
-        "patch_classification_sigmoid"
-        if scalar_patch_scores
-        else "all_convolutional_sigmoid"
+    resolved_map_method = map_method or (
+        "patch_classification_sigmoid" if scalar_patch_scores else "all_convolutional_sigmoid"
     )
-    metadata["map_method"] = map_method
+    metadata["map_method"] = resolved_map_method
     settings = _window_settings(window_settings, resolved_windows)
-    settings["map_method"] = map_method
+    settings["map_method"] = resolved_map_method
     return CamDetectionArtifact(
         maps=stitched.confidence.copy(),
         coverage=stitched.coverage.copy(),

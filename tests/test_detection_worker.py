@@ -24,6 +24,85 @@ from wafer_defect_studio.model_registry import create_resnet18
 
 
 class DetectionWorkerTest(unittest.TestCase):
+    def test_v4_spatial_detection_is_batch_invariant_and_preserves_source_probabilities(self):
+        class SpatialScorer(torch.nn.Module):
+            def forward(self, inputs):
+                mean = inputs.mean(dim=(-2, -1))[:, :1]
+                pattern = torch.tensor([[-2.0, -1.0], [1.0, 2.0]], device=inputs.device)
+                scratch = mean[:, :, None, None] + pattern
+                particle = -mean[:, :, None, None] - pattern
+                return torch.cat((scratch, particle), dim=1)
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = np.zeros((4, 6), dtype=np.uint8)
+            source[:, 2:] = 255
+            checkpoint = {
+                "checkpoint_format": "wafer_defect_studio.resnet18.v4",
+                "class_codes": ["scratch", "particle"],
+                "normalization_bounds": [{"dtype": "uint8", "source_min": 0, "source_max": 255, "low": 0.0, "high": 255.0, "low_percentile": 1.0, "high_percentile": 99.0}],
+                "input_size": {"width": 4, "height": 4},
+                "patch_size": 4,
+                "patch_stride": 2,
+                "feature_stride": 4,
+            }
+
+            def run(batch_size):
+                staging = root / f"v4-{batch_size}"
+                request = DetectionRequest(
+                    request_id=f"v4-{batch_size}", source=source, run_id="run-v4",
+                    profile_id="profile-v4", approved_evaluation_id="evaluation-v4",
+                    class_names=("scratch", "particle"), window_size=4, stride=2,
+                    center_weighting="linear", staging_path=staging,
+                    checkpoint_path=root / "v4.pt", model_id="spatial-model",
+                    batch_size=batch_size,
+                )
+                output = queue.Queue()
+                with patch("wafer_defect_studio.detection_worker.load_project_checkpoint", return_value=(SpatialScorer(), checkpoint)):
+                    run_detection_worker(request, output, threading.Event())
+                terminal = None
+                while terminal is None:
+                    message = decode_message(output.get_nowait())
+                    if isinstance(message, DetectionTerminal):
+                        terminal = message
+                self.assertEqual(terminal.status, "completed", terminal.message)
+                return json.loads((staging / "maps.json").read_text(encoding="utf-8"))
+
+            one = run(1)
+            many = run(8)
+            self.assertEqual(one["maps"], many["maps"])
+            self.assertEqual(one["map_shape"], [4, 6, 2])
+            self.assertEqual(one["window_settings"]["map_method"], "spatial_mil_sigmoid")
+            self.assertEqual(one["provenance"]["checkpoint_format"], "wafer_defect_studio.resnet18.v4")
+            self.assertEqual(one["provenance"]["feature_stride"], 4)
+            self.assertEqual(one["provenance"]["checkpoint_path"], str((root / "v4.pt").resolve()))
+            first_window = torch.nn.functional.interpolate(
+                torch.sigmoid(torch.tensor([[[[-1.5, -0.5], [1.5, 2.5]]]])),
+                size=(4, 4), mode="bilinear", align_corners=False,
+            )[0, 0]
+            second_window = torch.nn.functional.interpolate(
+                torch.sigmoid(torch.tensor([[[[-1.0, 0.0], [2.0, 3.0]]]])),
+                size=(4, 4), mode="bilinear", align_corners=False,
+            )[0, 0]
+            expected_overlap = (first_window[1, 2].item() * 0.875 + second_window[1, 0].item() * 0.625) / 1.5
+            self.assertAlmostEqual(one["maps"][1][2][0], expected_overlap)
+
+            mismatch = DetectionRequest(
+                request_id="v4-mismatch", source=source, run_id="run-v4", profile_id="profile-v4",
+                class_names=("scratch", "particle"), window_size=4, stride=1,
+                staging_path=root / "mismatch", checkpoint_path=root / "v4.pt",
+            )
+            output = queue.Queue()
+            with patch("wafer_defect_studio.detection_worker.load_project_checkpoint", return_value=(SpatialScorer(), checkpoint)):
+                run_detection_worker(mismatch, output, threading.Event())
+            terminal = None
+            while terminal is None:
+                message = decode_message(output.get_nowait())
+                if isinstance(message, DetectionTerminal):
+                    terminal = message
+            self.assertEqual(terminal.status, "failed")
+            self.assertIn("stride does not match", terminal.message)
+
     def test_v3_patch_detection_is_batch_invariant_and_stitches_scalar_scores(self):
         class PatchScorer(torch.nn.Module):
             def __init__(self):

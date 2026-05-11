@@ -251,7 +251,7 @@ def load_project_checkpoint(
     device: str | torch.device | None = "cpu",
     expected_class_codes: tuple[str, ...] | None = None,
     expected_input_size: tuple[int, int] | None = None,
-) -> tuple[ResNet18Classifier, dict[str, Any]]:
+) -> tuple[ResNet18Classifier | ResNet18SpatialLogits, dict[str, Any]]:
     """Load one validated project-produced ResNet18 checkpoint."""
 
     try:
@@ -266,18 +266,43 @@ def load_project_checkpoint(
         input_size["width"], input_size["height"]
     ) != tuple(expected_input_size):
         raise ModelRegistryError("project checkpoint input rectangle does not match the request")
-    model = create_resnet18(
-        checkpoint["class_count"],
-        weights=WeightsPolicy.NONE,
-        device=device,
-        feature_stride=32 if checkpoint["checkpoint_format"].endswith(".v1") else 16,
+    is_spatial = checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v4"
+    model = (
+        create_resnet18_spatial_logits(
+            checkpoint["class_count"], weights=WeightsPolicy.NONE, device=device
+        )
+        if is_spatial
+        else create_resnet18(
+            checkpoint["class_count"],
+            weights=WeightsPolicy.NONE,
+            device=device,
+            feature_stride=32 if checkpoint["checkpoint_format"].endswith(".v1") else 16,
+        )
     )
     try:
         model.load_state_dict(checkpoint["state_dict"], strict=True)
     except (RuntimeError, TypeError, ValueError) as error:
-        raise ModelRegistryError("project checkpoint state_dict does not match ResNet18") from error
+        model_name = "ResNet18 spatial logits" if is_spatial else "ResNet18"
+        raise ModelRegistryError(
+            f"project checkpoint state_dict does not match {model_name}"
+        ) from error
     model.eval()
     return model, checkpoint
+
+
+def spatial_logits_to_probabilities(logits: Tensor, output_size: tuple[int, int]) -> Tensor:
+    """Upsample raw spatial logits and return absolute NHWC sigmoid probabilities."""
+
+    if not isinstance(logits, Tensor) or logits.ndim != 4:
+        raise ModelRegistryError("spatial logits must have shape (N, C, H, W)")
+    if (
+        len(output_size) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in output_size)
+    ):
+        raise ModelRegistryError("output_size must be a positive (height, width) pair")
+    probabilities = torch.sigmoid(logits)
+    resized = F.interpolate(probabilities, size=output_size, mode="bilinear", align_corners=False)
+    return resized.permute(0, 2, 3, 1).contiguous()
 
 
 def resnet18_local_probabilities(
@@ -362,4 +387,5 @@ __all__ = [
     "max_pool_patch_logits",
     "resnet18_local_probabilities",
     "resolve_device",
+    "spatial_logits_to_probabilities",
 ]

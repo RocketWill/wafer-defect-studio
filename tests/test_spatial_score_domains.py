@@ -83,6 +83,17 @@ class SpatialScoreDomainTest(unittest.TestCase):
             "all_convolutional_sigmoid",
         )
 
+    def test_spatial_mil_map_method_keeps_absolute_values(self):
+        artifact = generate_all_convolutional_artifact(
+            self.window,
+            np.full((1, 2, 2, 1), 0.2),
+            class_names=("scratch",),
+            provenance=self.provenance,
+            map_method="spatial_mil_sigmoid",
+        )
+        np.testing.assert_allclose(artifact.maps, 0.2)
+        self.assertEqual(artifact.provenance["map_method"], "spatial_mil_sigmoid")
+
 
 if __name__ == "__main__":
     unittest.main()

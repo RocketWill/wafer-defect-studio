@@ -8,13 +8,54 @@ from wafer_defect_studio.model_registry import (
     ModelRegistryError,
     WeightsPolicy,
     create_resnet18,
+    create_resnet18_spatial_logits,
     load_project_checkpoint,
     resnet18_local_probabilities,
     resolve_device,
+    spatial_logits_to_probabilities,
 )
 
 
 class ModelRegistryTest(unittest.TestCase):
+    def test_v4_checkpoint_loads_strict_spatial_model_and_preserves_absolute_probabilities(self):
+        source = create_resnet18_spatial_logits(2, device="cpu")
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "v4.pt"
+            torch.save(
+                {
+                    "checkpoint_format": "wafer_defect_studio.resnet18.v4",
+                    "architecture": "resnet18_spatial_logits",
+                    "class_count": 2,
+                    "class_codes": ["scratch", "particle"],
+                    "normalization_bounds": [{"dtype": "uint8", "source_min": 0, "source_max": 255, "low": 0.0, "high": 255.0, "low_percentile": 1.0, "high_percentile": 99.0}],
+                    "input_size": {"width": 32, "height": 32},
+                    "feature_stride": 4,
+                    "patch_size": 32,
+                    "patch_stride": 16,
+                    "training_policy": "spatial_mil_v4",
+                    "loss_weights": {"positive_spatial_mil": 1.0, "absent_class_hard_negative": 1.0, "overlap_consistency": 1.0},
+                    "positive_class_weighting": {"formula": "negative_bag_count / positive_bag_count", "minimum": 1.0, "maximum": 10.0},
+                    "augmentation_policy": {"name": "spatial_mil_v4_defect_preserving_affine", "contrast": [0.9, 1.1], "brightness": [-0.03, 0.03], "seed": 7, "seed_formula": "run_seed + epoch * 1_000_003 + bag_index"},
+                    "state_dict": source.state_dict(),
+                }, path,
+            )
+            loaded, checkpoint = load_project_checkpoint(path, device="cpu")
+            self.assertEqual(loaded.architecture, "resnet18_spatial_logits")
+            self.assertEqual(checkpoint["checkpoint_format"], "wafer_defect_studio.resnet18.v4")
+            broken = torch.load(path, weights_only=False)
+            broken["state_dict"] = {**broken["state_dict"], "spatial_head.weight": torch.zeros((1, 960, 1, 1))}
+            torch.save(broken, path)
+            with self.assertRaisesRegex(ModelRegistryError, "spatial logits"):
+                load_project_checkpoint(path, device="cpu")
+
+        logits = torch.tensor([[[[-2.0, 0.0], [2.0, 4.0]]]])
+        actual = spatial_logits_to_probabilities(logits, (4, 6))
+        expected = torch.nn.functional.interpolate(torch.sigmoid(logits), size=(4, 6), mode="bilinear", align_corners=False).permute(0, 2, 3, 1)
+        wrong_order = torch.sigmoid(torch.nn.functional.interpolate(logits, size=(4, 6), mode="bilinear", align_corners=False)).permute(0, 2, 3, 1)
+        self.assertTrue(torch.equal(actual, expected))
+        self.assertFalse(torch.allclose(actual, wrong_order))
+        self.assertEqual(actual.shape, (1, 4, 6, 1))
+
     def test_default_stride16_preserves_legacy_state_dict_shapes(self):
         current = create_resnet18(2, device="cpu")
         legacy = create_resnet18(2, device="cpu", feature_stride=32)

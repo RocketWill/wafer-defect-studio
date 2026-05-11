@@ -26,7 +26,11 @@ from .cam_detection import (
     generate_cam_artifact,
 )
 from .detection_windows import Window, enumerate_inference_windows
-from .model_registry import load_project_checkpoint, resnet18_local_probabilities
+from .model_registry import (
+    load_project_checkpoint,
+    resnet18_local_probabilities,
+    spatial_logits_to_probabilities,
+)
 from .normalization import NormalizationBounds
 from .training_dataset import extract_model_patch
 
@@ -389,6 +393,7 @@ def run_detection_worker(
         checkpoint_model = None
         checkpoint = None
         is_patch_checkpoint = False
+        is_spatial_checkpoint = False
         bounds_by_dtype: dict[str, NormalizationBounds] = {}
         if request_value.checkpoint_path is not None:
             checkpoint_model, checkpoint = load_project_checkpoint(
@@ -408,7 +413,10 @@ def run_detection_worker(
             is_patch_checkpoint = (
                 checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v3"
             )
-            if is_patch_checkpoint:
+            is_spatial_checkpoint = (
+                checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v4"
+            )
+            if is_patch_checkpoint or is_spatial_checkpoint:
                 expected_window = (checkpoint["patch_size"], checkpoint["patch_size"])
                 expected_stride = (checkpoint["patch_stride"], checkpoint["patch_stride"])
                 if request_value.window_size != expected_window:
@@ -459,7 +467,14 @@ def run_detection_worker(
                     ]
                 ).to(device)
                 with torch.no_grad():
-                    if is_patch_checkpoint:
+                    if is_spatial_checkpoint:
+                        local_maps.append(
+                            spatial_logits_to_probabilities(
+                                checkpoint_model(normalized),
+                                (request_value.window_size[1], request_value.window_size[0]),
+                            ).detach().cpu().numpy()
+                        )
+                    elif is_patch_checkpoint:
                         local_maps.append(
                             torch.sigmoid(checkpoint_model(normalized)).detach().cpu().numpy()
                         )
@@ -523,6 +538,9 @@ def run_detection_worker(
         }
         if checkpoint_model is not None:
             provenance["checkpoint_path"] = str(Path(request_value.checkpoint_path).expanduser().resolve())
+            provenance["checkpoint_format"] = checkpoint["checkpoint_format"]
+            if is_spatial_checkpoint:
+                provenance["feature_stride"] = 4
             artifact = generate_all_convolutional_artifact(
                 windows,
                 map_values,
@@ -532,6 +550,7 @@ def run_detection_worker(
                 model_id=request_value.model_id,
                 profile_id=request_value.profile_id,
                 evaluation_id=evaluation_id,
+                map_method="spatial_mil_sigmoid" if is_spatial_checkpoint else None,
             )
         else:
             artifact = generate_cam_artifact(
