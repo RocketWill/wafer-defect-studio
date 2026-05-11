@@ -1712,8 +1712,12 @@ class MainWindow(QMainWindow):
                 patch_size=request.config.patch_size,
                 patch_stride=request.config.patch_stride,
                 bag_pooling=(
-                    "max" if request.config.patch_size is not None else None
+                    "max"
+                    if request.config.patch_size is not None
+                    and request.config.training_policy == "legacy"
+                    else None
                 ),
+                training_policy=request.config.training_policy,
             )
             run = create_training_run(project_path, run_config, run_id=run_id)
             update_training_run_terminal(

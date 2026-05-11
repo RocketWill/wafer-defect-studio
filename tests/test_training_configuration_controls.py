@@ -55,6 +55,15 @@ class TrainingConfigurationControlsTest(unittest.TestCase):
         )
         self.assertTrue(start.isEnabled())
 
+        mode.setCurrentText("Spatial MIL v4")
+        app.processEvents()
+        spatial_request = config.build_request("spatial", "staging/spatial")
+        self.assertEqual(spatial_request.config.training_policy, "spatial_mil_v4")
+        self.assertEqual(pooling.text(), "spatial logits (no scalar pooling)")
+        self.assertIn("Spatial MIL v4", summary.text())
+        self.assertIn("no scalar pooling", summary.text())
+        self.assertTrue(patch_size.isVisibleTo(config))
+
         patch_stride.setValue(129)
         app.processEvents()
         self.assertFalse(start.isEnabled())
