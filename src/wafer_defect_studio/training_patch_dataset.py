@@ -84,6 +84,7 @@ class ClassAwareEqualShapeBatchSampler(Sampler[list[int]]):
         batch_size: int,
         seed: int,
         epoch_size: int | None = None,
+        priority_normal_indices: Sequence[int] = (),
     ) -> None:
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
             raise TrainingPatchDatasetError("batch_size must be a positive integer")
@@ -106,6 +107,21 @@ class ClassAwareEqualShapeBatchSampler(Sampler[list[int]]):
         normal = [index for index, target in enumerate(target_keys) if not any(target)]
         if normal:
             groups.append(normal)
+        priority_normal_indices = tuple(priority_normal_indices)
+        if any(
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or index < 0
+            or index >= len(target_keys)
+            for index in priority_normal_indices
+        ):
+            raise TrainingPatchDatasetError("priority_normal_indices contains an out of range index")
+        if len(set(priority_normal_indices)) != len(priority_normal_indices):
+            raise TrainingPatchDatasetError("priority_normal_indices must be unique")
+        if any(any(target_keys[index]) for index in priority_normal_indices):
+            raise TrainingPatchDatasetError("priority_normal_indices must select normal samples")
+        if priority_normal_indices:
+            groups.append(list(priority_normal_indices))
         if epoch_size is None:
             epoch_size = len(shape_keys)
         if isinstance(epoch_size, bool) or not isinstance(epoch_size, int) or epoch_size < 1:
@@ -243,6 +259,12 @@ class TrainingPatchDataset(Dataset[PatchDatasetItem]):
             )
             for bag in self._items
         )
+
+    @property
+    def bag_ids(self) -> tuple[str, ...] | None:
+        if self._bundle.version != 2:
+            return None
+        return tuple(bag.bag_id for bag in self._items)
 
     @property
     def bag_target_keys(self) -> tuple[tuple[int, ...], ...] | None:

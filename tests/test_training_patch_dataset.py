@@ -19,6 +19,44 @@ from wafer_defect_studio.training_patch_dataset import TrainingPatchDataset
 
 
 class TrainingPatchDatasetTest(unittest.TestCase):
+    def test_bag_ids_preserve_interleaved_bundle_order_after_split_filter(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "source.png"
+            self.assertTrue(QImage(2, 1, QImage.Format.Format_Grayscale8).save(str(path), "PNG"))
+            sources = tuple(
+                TrainingBundleSource(image_id, split, str(path), _hash(path), "uint8")
+                for image_id, split in (
+                    ("train-z", "train"),
+                    ("validation", "validation"),
+                    ("train-a", "train"),
+                    ("train-m", "train"),
+                )
+            )
+            rects = (Rect(0, 0, 1, 1), Rect(1, 0, 1, 1))
+            bundle = TrainingInputBundle(
+                "snapshot",
+                "split",
+                ("scratch",),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                sources,
+                (),
+                2,
+                tuple(
+                    TrainingPatchBag(bag_id, image_id, 0, 0, rects, ("scratch",))
+                    for bag_id, image_id in (
+                        ("bag-z", "train-z"),
+                        ("bag-validation", "validation"),
+                        ("bag-a", "train-a"),
+                        ("bag-m", "train-m"),
+                    )
+                ),
+            )
+
+            self.assertEqual(
+                TrainingPatchDataset(bundle, "train").bag_ids,
+                ("bag-z", "bag-a", "bag-m"),
+            )
+
     def test_v4_bag_affine_is_overlap_consistent_and_epoch_seeded(self):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "source.png"
@@ -71,6 +109,7 @@ class TrainingPatchDatasetTest(unittest.TestCase):
             legacy = TrainingPatchDataset(bundle, "train")
             spatial = TrainingPatchDataset(bundle, "train", include_patch_rects=True)
 
+            self.assertEqual(spatial.bag_ids, ("bag",))
             self.assertEqual(spatial.bag_target_keys, ((0, 1),))
             self.assertEqual(len(legacy[0]), 2)
             inputs, target, rects = spatial[0]
@@ -126,13 +165,13 @@ class TrainingPatchDatasetTest(unittest.TestCase):
             )
             config = AugmentationConfig(horizontal_flip=True)
 
-            train_patches, train_target = TrainingPatchDataset(
-                bundle, "train", augmentation=config
-            )[0]
-            validation_patches, validation_target = TrainingPatchDataset(
-                bundle, "validation", augmentation=config
-            )[0]
+            train_dataset = TrainingPatchDataset(bundle, "train", augmentation=config)
+            validation_dataset = TrainingPatchDataset(bundle, "validation", augmentation=config)
+            train_patches, train_target = train_dataset[0]
+            validation_patches, validation_target = validation_dataset[0]
 
+            self.assertEqual(train_dataset.bag_ids, ("train-image:0:0",))
+            self.assertEqual(validation_dataset.bag_ids, ("validation-image:0:0",))
             self.assertEqual(train_patches.shape, (2, 3, 128, 128))
             self.assertEqual(validation_patches.shape, (2, 3, 128, 128))
             self.assertTrue(torch.equal(train_patches[:, 0], train_patches[:, 1]))

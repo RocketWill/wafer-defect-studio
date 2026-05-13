@@ -9,6 +9,84 @@ from wafer_defect_studio.training_patch_dataset import (
 
 
 class TrainingClassAwareSamplerTest(unittest.TestCase):
+    def test_priority_normals_form_an_additional_replay_group(self):
+        shapes = ((4,),) * 6
+        targets = ((1,), (1,), (0,), (0,), (0,), (0,))
+        priority = ClassAwareEqualShapeBatchSampler(
+            shapes,
+            targets,
+            batch_size=1,
+            seed=7,
+            epoch_size=12,
+            priority_normal_indices=(2, 3),
+        )
+        priority.set_epoch(2)
+
+        replay = tuple(index for batch in priority for index in batch)
+
+        self.assertEqual(replay, (3, 0, 3, 5, 1, 2, 4, 0, 3, 2, 1, 2))
+        self.assertEqual(replay, tuple(index for batch in priority for index in batch))
+        self.assertEqual(tuple(replay.count(index) for index in range(6)), (2, 2, 3, 3, 1, 1))
+        self.assertEqual(len(replay), 12)
+        self.assertEqual(len(priority), 12)
+
+    def test_priority_replay_keeps_mixed_shapes_and_exact_partial_epoch(self):
+        shapes = ((4,), (4,), (4,), (9,), (9,))
+        targets = ((1,), (1,), (0,), (0,), (0,))
+        sampler = ClassAwareEqualShapeBatchSampler(
+            shapes,
+            targets,
+            batch_size=2,
+            seed=11,
+            epoch_size=7,
+            priority_normal_indices=(2, 3),
+        )
+
+        batches = tuple(tuple(batch) for batch in sampler)
+
+        self.assertEqual(sum(map(len, batches)), 7)
+        self.assertEqual(len(sampler), 4)
+        self.assertTrue(all(len({shapes[index] for index in batch}) == 1 for batch in batches))
+
+    def test_empty_priority_is_byte_for_byte_compatible(self):
+        arguments = (((4,), (4,), (9,), (9,)), ((1,), (1,), (0,), (0,)))
+        legacy = ClassAwareEqualShapeBatchSampler(
+            *arguments, batch_size=2, seed=13, epoch_size=9
+        )
+        explicit = ClassAwareEqualShapeBatchSampler(
+            *arguments,
+            batch_size=2,
+            seed=13,
+            epoch_size=9,
+            priority_normal_indices=(),
+        )
+        legacy.set_epoch(2)
+        explicit.set_epoch(2)
+
+        self.assertEqual(
+            tuple(tuple(batch) for batch in legacy),
+            tuple(tuple(batch) for batch in explicit),
+        )
+
+    def test_rejects_invalid_priority_normal_context(self):
+        shapes = ((4,), (4,), (4,))
+        targets = ((1,), (0,), (0,))
+        cases = (
+            ((3,), "out of range"),
+            ((1, 1), "unique"),
+            ((0,), "normal"),
+        )
+        for indices, message in cases:
+            with self.subTest(indices=indices):
+                with self.assertRaisesRegex(TrainingPatchDatasetError, message):
+                    ClassAwareEqualShapeBatchSampler(
+                        shapes,
+                        targets,
+                        batch_size=1,
+                        seed=0,
+                        priority_normal_indices=indices,
+                    )
+
     def test_balances_class_and_normal_groups_with_equal_shape_batches(self):
         shapes = ((4,), (4,), (9,), (9,), (4,), (4,))
         targets = ((1, 0), (1, 0), (0, 1), (0, 1), (0, 0), (0, 0))
