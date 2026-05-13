@@ -66,15 +66,25 @@ class DefectOracle:
     def grid_truth(self, grids: tuple[AnnotationGrid, ...]) -> dict[tuple[int, int], tuple[str, ...]]:
         return {
             (grid.row, grid.column): tuple(
-                sorted({defect.class_code for defect in self.defects if _intersects(defect, grid)})
+                sorted(
+                    {
+                        defect.class_code
+                        for defect in self.defects
+                        if defect_intersects_rectangle(
+                            defect, grid.x, grid.y, grid.x + grid.width, grid.y + grid.height
+                        )
+                    }
+                )
             )
             for grid in grids
         }
 
 
-def _intersects(defect: Scratch | Particle, grid: AnnotationGrid) -> bool:
-    left, top = grid.x, grid.y
-    right, bottom = left + grid.width, top + grid.height
+def defect_intersects_rectangle(
+    defect: Scratch | Particle, left: int, top: int, right: int, bottom: int
+) -> bool:
+    """Return whether closed generated support contacts a closed rectangle."""
+
     if isinstance(defect, Particle):
         x, y = defect.center
         return hypot(x - min(max(x, left), right), y - min(max(y, top), bottom)) <= defect.radius
