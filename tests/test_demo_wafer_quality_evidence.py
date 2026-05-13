@@ -13,6 +13,7 @@ class WaferQualityEvidenceTest(unittest.TestCase):
         cases = (
             WaferEvidenceCase(
                 "a.png",
+                "validation",
                 DefectOracle(4, 2, (Scratch("scratch", ((2, 0), (2, 1)), 0), Particle("particle", (0, 0), 0))),
                 grids,
                 numpy.array(
@@ -24,6 +25,7 @@ class WaferQualityEvidenceTest(unittest.TestCase):
             ),
             WaferEvidenceCase(
                 "b.png",
+                "validation",
                 DefectOracle(4, 2, (Particle("particle", (3, 1), 0),)),
                 grids,
                 numpy.array(
@@ -64,6 +66,7 @@ class WaferQualityEvidenceTest(unittest.TestCase):
     def test_shape_and_class_errors_include_case_context(self):
         case = WaferEvidenceCase(
             "bad.png",
+            "validation",
             DefectOracle(4, 2, ()),
             annotation_grids(4, 2, 2, 2),
             numpy.zeros((2, 4, 1)),
@@ -74,6 +77,7 @@ class WaferQualityEvidenceTest(unittest.TestCase):
 
         wrong_shape = WaferEvidenceCase(
             "shape.png",
+            "validation",
             case.oracle,
             case.grids,
             numpy.zeros((1, 4, 2)),
@@ -88,6 +92,7 @@ class WaferQualityEvidenceTest(unittest.TestCase):
     def test_zero_denominators_are_not_reported_as_perfect_scores(self):
         case = WaferEvidenceCase(
             "empty.png",
+            "validation",
             DefectOracle(2, 2, ()),
             annotation_grids(2, 2, 2, 2),
             numpy.zeros((2, 2, 1)),
@@ -104,6 +109,7 @@ class WaferQualityEvidenceTest(unittest.TestCase):
     def test_asserted_false_negative_contributes_zero_occupancy(self):
         case = WaferEvidenceCase(
             "miss.png",
+            "validation",
             DefectOracle(2, 2, (Particle("particle", (1, 1), 0),)),
             annotation_grids(2, 2, 2, 2),
             numpy.zeros((2, 2, 1)),

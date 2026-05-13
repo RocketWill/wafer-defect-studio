@@ -15,6 +15,7 @@ from wafer_defect_studio.grid_geometry import AnnotationGrid
 @dataclass(frozen=True)
 class WaferEvidenceCase:
     filename: str
+    split: str
     oracle: DefectOracle
     grids: tuple[AnnotationGrid, ...]
     absolute_maps: numpy.ndarray
