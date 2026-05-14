@@ -8,6 +8,7 @@ publish staged artifacts back into the project database.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, fields
 from math import isfinite
 from pathlib import Path
@@ -66,6 +67,8 @@ class TrainingConfig(_VersionedMessage):
     patch_size: int | None = None
     patch_stride: int | None = None
     training_policy: str = "legacy"
+    priority_normal_bag_ids: tuple[str, ...] = ()
+    hard_negative_selection_sha256: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("snapshot_id", "split_id", "architecture", "device", "weights_policy"):
@@ -100,6 +103,29 @@ class TrainingConfig(_VersionedMessage):
                 raise TrainingProtocolError("patch_stride cannot exceed patch_size")
         if self.training_policy == "spatial_mil_v4" and self.patch_size is None:
             raise TrainingProtocolError("spatial_mil_v4 requires patch geometry")
+        if not isinstance(self.priority_normal_bag_ids, (list, tuple)):
+            raise TrainingProtocolError("priority_normal_bag_ids must be an ordered sequence")
+        priority_ids = tuple(self.priority_normal_bag_ids)
+        if (
+            any(not isinstance(item, str) or not item.strip() for item in priority_ids)
+            or len(set(priority_ids)) != len(priority_ids)
+        ):
+            raise TrainingProtocolError(
+                "priority_normal_bag_ids must contain unique non-empty strings"
+            )
+        object.__setattr__(self, "priority_normal_bag_ids", priority_ids)
+        selection_sha256 = self.hard_negative_selection_sha256
+        if selection_sha256 is not None:
+            if not isinstance(selection_sha256, str) or re.fullmatch(r"[0-9a-fA-F]{64}", selection_sha256) is None:
+                raise TrainingProtocolError("hard_negative_selection_sha256 must be 64 hexadecimal characters")
+            selection_sha256 = selection_sha256.lower()
+            object.__setattr__(self, "hard_negative_selection_sha256", selection_sha256)
+        if bool(priority_ids) != (selection_sha256 is not None):
+            raise TrainingProtocolError(
+                "priority_normal_bag_ids and hard_negative_selection_sha256 must be provided together"
+            )
+        if priority_ids and self.training_policy != "spatial_mil_v4":
+            raise TrainingProtocolError("hard-negative refinement requires spatial_mil_v4")
 
     def validate_patch_geometry(self, sample_width: int, sample_height: int) -> None:
         """Reject configured Model Patches that cannot fit one frozen Grid sample."""
@@ -129,6 +155,8 @@ class TrainingConfig(_VersionedMessage):
             "patch_size": self.patch_size,
             "patch_stride": self.patch_stride,
             "training_policy": self.training_policy,
+            "priority_normal_bag_ids": list(self.priority_normal_bag_ids),
+            "hard_negative_selection_sha256": self.hard_negative_selection_sha256,
         }
 
     @classmethod
@@ -142,6 +170,13 @@ class TrainingConfig(_VersionedMessage):
         if "patch_size" not in supplied and "patch_stride" not in supplied:
             value = {**value, "patch_size": None, "patch_stride": None}
             supplied.update(("patch_size", "patch_stride"))
+        if "priority_normal_bag_ids" not in supplied and "hard_negative_selection_sha256" not in supplied:
+            value = {
+                **value,
+                "priority_normal_bag_ids": (),
+                "hard_negative_selection_sha256": None,
+            }
+            supplied.update(("priority_normal_bag_ids", "hard_negative_selection_sha256"))
         _require_keys(value, expected, "config")
         try:
             return cls(**value)

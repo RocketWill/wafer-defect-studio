@@ -36,6 +36,22 @@ from wafer_defect_studio.training_run import (
 
 
 class TrainingRunTest(unittest.TestCase):
+    def test_run_config_preserves_hard_negative_refinement_values(self):
+        config = RunConfig(
+            "snapshot-1", "split-1", training_policy="spatial_mil_v4",
+            patch_size=32, patch_stride=16,
+            priority_normal_bag_ids=["bag-2", "bag-1"],
+            hard_negative_selection_sha256="AB" * 32,
+        )
+        self.assertEqual(config.priority_normal_bag_ids, ("bag-2", "bag-1"))
+        self.assertEqual(config.hard_negative_selection_sha256, "ab" * 32)
+        with self.assertRaisesRegex(TrainingRunError, "provided together"):
+            RunConfig(
+                "snapshot-1", "split-1", training_policy="spatial_mil_v4",
+                patch_size=32, patch_stride=16,
+                priority_normal_bag_ids=("bag-2",),
+            )
+
     def test_run_config_requires_complete_patch_classification_geometry(self):
         legacy = RunConfig("snapshot-1", "split-1")
         self.assertEqual(legacy.training_policy, "legacy")
@@ -130,6 +146,43 @@ class TrainingRunTest(unittest.TestCase):
             }
             torch.save(checkpoint, path)
             self.assertEqual(validate_project_checkpoint(path), checkpoint)
+            refined = {
+                **checkpoint,
+                "hard_negative_refinement": {
+                    "selection_sha256": "a" * 64,
+                    "priority_normal_bag_ids": ["bag-2", "bag-1"],
+                    "base_epochs": 3,
+                    "refinement_epochs": 5,
+                },
+            }
+            torch.save(refined, path)
+            self.assertEqual(validate_project_checkpoint(path), refined)
+            invalid_refinement = {
+                **refined,
+                "hard_negative_refinement": {
+                    **refined["hard_negative_refinement"],
+                    "refinement_epochs": 4,
+                },
+            }
+            torch.save(invalid_refinement, path)
+            with self.assertRaisesRegex(TrainingRunError, "hard_negative_refinement"):
+                validate_project_checkpoint(path)
+            refinement_tampering = (
+                {**refined["hard_negative_refinement"], "extra": True},
+                {**refined["hard_negative_refinement"], "selection_sha256": "z" * 64},
+                {**refined["hard_negative_refinement"], "priority_normal_bag_ids": []},
+                {**refined["hard_negative_refinement"], "priority_normal_bag_ids": ["bag", "bag"]},
+                {**refined["hard_negative_refinement"], "base_epochs": True},
+                {**refined["hard_negative_refinement"], "base_epochs": 0},
+                {**refined["hard_negative_refinement"], "refinement_epochs": 4},
+            )
+            for refinement_value in refinement_tampering:
+                torch.save(
+                    {**refined, "hard_negative_refinement": refinement_value},
+                    path,
+                )
+                with self.assertRaisesRegex(TrainingRunError, "hard_negative_refinement"):
+                    validate_project_checkpoint(path)
             tampered = (
                 ({"architecture": "resnet18"}, "architecture"),
                 ({"feature_stride": 16}, "feature_stride"),

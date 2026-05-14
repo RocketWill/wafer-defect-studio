@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import uuid
 from collections.abc import Mapping
@@ -86,6 +87,8 @@ class RunConfig:
     patch_stride: int | None = None
     bag_pooling: str | None = None
     training_policy: str = "legacy"
+    priority_normal_bag_ids: tuple[str, ...] = ()
+    hard_negative_selection_sha256: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("snapshot_id", "split_id", "architecture", "device", "weights_policy"):
@@ -130,6 +133,29 @@ class RunConfig:
             raise TrainingRunError(
                 "patch_size and patch_stride must be provided with bag_pooling"
             )
+        if not isinstance(self.priority_normal_bag_ids, (list, tuple)):
+            raise TrainingRunError("priority_normal_bag_ids must be an ordered sequence")
+        priority_ids = tuple(self.priority_normal_bag_ids)
+        if (
+            any(not isinstance(item, str) or not item.strip() for item in priority_ids)
+            or len(set(priority_ids)) != len(priority_ids)
+        ):
+            raise TrainingRunError(
+                "priority_normal_bag_ids must contain unique non-empty strings"
+            )
+        object.__setattr__(self, "priority_normal_bag_ids", priority_ids)
+        selection_sha256 = self.hard_negative_selection_sha256
+        if selection_sha256 is not None:
+            if not isinstance(selection_sha256, str) or re.fullmatch(r"[0-9a-fA-F]{64}", selection_sha256) is None:
+                raise TrainingRunError("hard_negative_selection_sha256 must be 64 hexadecimal characters")
+            selection_sha256 = selection_sha256.lower()
+            object.__setattr__(self, "hard_negative_selection_sha256", selection_sha256)
+        if bool(priority_ids) != (selection_sha256 is not None):
+            raise TrainingRunError(
+                "priority_normal_bag_ids and hard_negative_selection_sha256 must be provided together"
+            )
+        if priority_ids and self.training_policy != "spatial_mil_v4":
+            raise TrainingRunError("hard-negative refinement requires spatial_mil_v4")
 
     @property
     def model_config(self) -> dict[str, Any]:
@@ -155,6 +181,8 @@ class RunConfig:
             "learning_rate": self.learning_rate,
             "seed": self.seed,
             "device": self.device,
+            "priority_normal_bag_ids": list(self.priority_normal_bag_ids),
+            "hard_negative_selection_sha256": self.hard_negative_selection_sha256,
         }
 
 
@@ -608,6 +636,34 @@ def validate_project_checkpoint(
             "seed_formula": "run_seed + epoch * 1_000_003 + bag_index",
         } or isinstance(seed, bool) or not isinstance(seed, int):
             raise TrainingRunError("resnet18.v4 checkpoint augmentation_policy is invalid")
+        refinement = value.get("hard_negative_refinement")
+        if refinement is not None:
+            if not isinstance(refinement, Mapping) or set(refinement) != {
+                "selection_sha256",
+                "priority_normal_bag_ids",
+                "base_epochs",
+                "refinement_epochs",
+            }:
+                raise TrainingRunError(
+                    "resnet18.v4 checkpoint hard_negative_refinement is invalid"
+                )
+            selection_sha256 = refinement["selection_sha256"]
+            bag_ids = refinement["priority_normal_bag_ids"]
+            if (
+                not isinstance(selection_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", selection_sha256) is None
+                or not isinstance(bag_ids, list)
+                or not bag_ids
+                or any(not isinstance(item, str) or not item.strip() for item in bag_ids)
+                or len(set(bag_ids)) != len(bag_ids)
+                or isinstance(refinement["base_epochs"], bool)
+                or not isinstance(refinement["base_epochs"], int)
+                or refinement["base_epochs"] < 1
+                or refinement["refinement_epochs"] != 5
+            ):
+                raise TrainingRunError(
+                    "resnet18.v4 checkpoint hard_negative_refinement is invalid"
+                )
     expected_architecture = (
         "resnet18_spatial_logits"
         if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V4

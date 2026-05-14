@@ -45,6 +45,46 @@ from wafer_defect_studio.training_patch_dataset import (
 
 
 class TrainingWorkerTest(unittest.TestCase):
+    def test_v4_worker_rejects_unknown_priority_normal_bag_id_with_train_context(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "source.png"
+            image = QImage(32, 32, QImage.Format.Format_Grayscale8)
+            self.assertTrue(image.save(str(source), "PNG"))
+            bundle = TrainingInputBundle(
+                "snapshot", "split", ("scratch",),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                (TrainingBundleSource("wafer", "train", str(source), _hash(source), "uint8"),),
+                (), 2,
+                (
+                    TrainingPatchBag("positive", "wafer", 0, 0, (Rect(0, 0, 32, 32),), ("scratch",)),
+                    TrainingPatchBag("normal", "wafer", 0, 1, (Rect(0, 0, 32, 32),), ()),
+                ),
+            )
+            bundle_path = root / "bundle.json"
+            bundle_path.write_text(bundle.to_json(), encoding="utf-8")
+            output = queue.Queue()
+            run_worker(
+                TrainingRequest(
+                    request_id="unknown-priority",
+                    config=TrainingConfig(
+                        snapshot_id="snapshot", split_id="split", class_count=1,
+                        epochs=1, batch_size=1, device="cpu", patch_size=32,
+                        patch_stride=32, training_policy="spatial_mil_v4",
+                        priority_normal_bag_ids=("not-in-train",),
+                        hard_negative_selection_sha256="b" * 64,
+                    ),
+                    artifact_staging_path=root / "staging",
+                    input_bundle_path=bundle_path,
+                ),
+                output,
+                threading.Event(),
+            )
+            terminal = decode_message(output.get_nowait())
+            self.assertEqual(terminal.status, "failed")
+            self.assertIn("absent from the train split", terminal.message)
+            self.assertIn("not-in-train", terminal.message)
+
     def test_v4_worker_rejects_missing_training_input_bundle(self):
         with TemporaryDirectory() as temporary_directory:
             output = queue.Queue()
@@ -99,6 +139,20 @@ class TrainingWorkerTest(unittest.TestCase):
             bundle_path = root / "bundle.json"
             bundle_path.write_text(bundle.to_json(), encoding="utf-8")
             output = queue.Queue()
+            sampler_epochs = []
+            dataset_epochs = []
+            original_sampler_set_epoch = ClassAwareEqualShapeBatchSampler.set_epoch
+            original_dataset_set_epoch = TrainingPatchDataset.set_epoch
+            original_sgd = torch.optim.SGD
+            original_loader_factory = create_training_data_loader
+
+            def record_sampler_epoch(sampler, epoch):
+                sampler_epochs.append(epoch)
+                return original_sampler_set_epoch(sampler, epoch)
+
+            def record_dataset_epoch(dataset, epoch):
+                dataset_epochs.append(epoch)
+                return original_dataset_set_epoch(dataset, epoch)
 
             def connected(value):
                 return lambda logits, *_args, **_kwargs: logits.sum() * 0.0 + value
@@ -106,6 +160,16 @@ class TrainingWorkerTest(unittest.TestCase):
             with mock.patch(
                 "wafer_defect_studio.training_worker.create_resnet18_spatial_logits",
                 return_value=FakeSpatialModel(),
+            ), mock.patch(
+                "wafer_defect_studio.training_worker.create_training_data_loader",
+                wraps=original_loader_factory,
+            ) as loader_factory, mock.patch(
+                "wafer_defect_studio.training_worker.torch.optim.SGD",
+                wraps=original_sgd,
+            ) as optimizer_factory, mock.patch.object(
+                ClassAwareEqualShapeBatchSampler, "set_epoch", record_sampler_epoch,
+            ), mock.patch.object(
+                TrainingPatchDataset, "set_epoch", record_dataset_epoch,
             ), mock.patch(
                 "wafer_defect_studio.training_worker.positive_spatial_mil_loss",
                 side_effect=connected(1.0),
@@ -123,6 +187,8 @@ class TrainingWorkerTest(unittest.TestCase):
                             snapshot_id="snapshot", split_id="split", class_count=2,
                             epochs=1, batch_size=1, device="cpu", patch_size=32,
                             patch_stride=16, training_policy="spatial_mil_v4",
+                            priority_normal_bag_ids=("bag-2",),
+                            hard_negative_selection_sha256="a" * 64,
                         ),
                         artifact_staging_path=root / "staging",
                         input_bundle_path=bundle_path,
@@ -139,8 +205,30 @@ class TrainingWorkerTest(unittest.TestCase):
             self.assertEqual(messages[-1].status, "completed", messages[-1].message)
             self.assertEqual(
                 [message.loss for message in messages if isinstance(message, ProgressMessage)],
-                [7.0, 7.0, 7.0],
+                [7.0] * 18,
             )
+            progress = [message for message in messages if isinstance(message, ProgressMessage)]
+            self.assertEqual(progress[-1].total_steps, 18)
+            self.assertEqual(progress[-1].total_epochs, 6)
+            self.assertEqual(sampler_epochs, list(range(6)))
+            self.assertEqual(dataset_epochs, list(range(6)))
+            self.assertEqual(optimizer_factory.call_count, 1)
+            self.assertEqual(loader_factory.call_count, 2)
+            self.assertNotIn("priority_normal_indices", loader_factory.call_args_list[0].kwargs)
+            self.assertEqual(
+                loader_factory.call_args_list[1].kwargs["priority_normal_indices"],
+                (2,),
+            )
+            checkpoint = validate_project_checkpoint(root / "staging" / "model.pt")
+            self.assertEqual(checkpoint["hard_negative_refinement"], {
+                "selection_sha256": "a" * 64,
+                "priority_normal_bag_ids": ["bag-2"],
+                "base_epochs": 1,
+                "refinement_epochs": 5,
+            })
+            metrics = json.loads((root / "staging" / "metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual(metrics["architecture"], "resnet18_spatial_logits")
+            self.assertEqual((metrics["epochs"], metrics["base_epochs"], metrics["refinement_epochs"]), (6, 1, 5))
 
     def test_v4_worker_rejects_v1_bundle_with_policy_and_version_context(self):
         with TemporaryDirectory() as temporary_directory:
@@ -308,6 +396,8 @@ class TrainingWorkerTest(unittest.TestCase):
                 "seed": 7,
                 "seed_formula": "run_seed + epoch * 1_000_003 + bag_index",
             })
+            metrics = json.loads((root / "staging" / "metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual(metrics["architecture"], "resnet18_spatial_logits")
             self.assertIn("spatial_head.weight", checkpoint["state_dict"])
             torch.manual_seed(7)
             initial_model = create_resnet18_spatial_logits(2, weights="none", device="cpu")

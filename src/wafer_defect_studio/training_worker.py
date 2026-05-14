@@ -66,6 +66,7 @@ def create_training_data_loader(
     config: TrainingConfig,
     *,
     split: str,
+    priority_normal_indices: tuple[int, ...] = (),
 ) -> DataLoader:
     """Create the worker loader while keeping v2 Patch Bag shapes separate."""
 
@@ -82,6 +83,7 @@ def create_training_data_loader(
                     target_keys,
                     batch_size=config.batch_size,
                     seed=config.seed,
+                    priority_normal_indices=priority_normal_indices,
                 ),
                 num_workers=0,
             )
@@ -206,6 +208,7 @@ def run_worker(
         log_lines.append(f"batch_size={config.batch_size}")
         bundle = None
         loader = None
+        refinement_loader = None
         if request_value.input_bundle_path is not None:
             bundle_path = Path(request_value.input_bundle_path).expanduser().resolve()
             try:
@@ -258,6 +261,28 @@ def run_worker(
                 config,
                 split="train",
             )
+            if config.priority_normal_bag_ids:
+                bag_ids = dataset.bag_ids
+                if bag_ids is None:
+                    raise RuntimeError("hard-negative refinement requires v2 Patch Bag IDs")
+                index_by_id = {bag_id: index for index, bag_id in enumerate(bag_ids)}
+                unknown = tuple(
+                    bag_id for bag_id in config.priority_normal_bag_ids
+                    if bag_id not in index_by_id
+                )
+                if unknown:
+                    raise RuntimeError(
+                        "hard-negative refinement bag IDs are absent from the train split: "
+                        + ", ".join(unknown)
+                    )
+                refinement_loader = create_training_data_loader(
+                    dataset,
+                    config,
+                    split="train",
+                    priority_normal_indices=tuple(
+                        index_by_id[bag_id] for bag_id in config.priority_normal_bag_ids
+                    ),
+                )
         if config.training_policy == "spatial_mil_v4" and bundle is None:
             raise RuntimeError(
                 "spatial_mil_v4 requires a v2 Training Input Bundle"
@@ -293,6 +318,8 @@ def run_worker(
             total_steps = config.epochs * synthetic_steps
         else:
             total_steps = config.epochs * len(loader)
+            if refinement_loader is not None:
+                total_steps += 5 * len(refinement_loader)
         started = time.monotonic()
         step_number = 0
         positive_class_weights = (
@@ -301,13 +328,19 @@ def run_worker(
             else None
         )
 
-        for epoch in range(1, config.epochs + 1):
-            if loader is not None and config.training_policy == "spatial_mil_v4":
-                loader.batch_sampler.set_epoch(epoch - 1)
-                loader.dataset.set_epoch(epoch - 1)
+        total_epochs = config.epochs + (5 if refinement_loader is not None else 0)
+        for epoch in range(1, total_epochs + 1):
+            active_loader = (
+                refinement_loader
+                if refinement_loader is not None and epoch > config.epochs
+                else loader
+            )
+            if active_loader is not None and config.training_policy == "spatial_mil_v4":
+                active_loader.batch_sampler.set_epoch(epoch - 1)
+                active_loader.dataset.set_epoch(epoch - 1)
             batches = (
-                loader
-                if loader is not None
+                active_loader
+                if active_loader is not None
                 else ((synthetic_inputs, synthetic_targets) for _ in range(synthetic_steps))
             )
             for batch in batches:
@@ -383,7 +416,7 @@ def run_worker(
                         request_id=request_value.request_id,
                         phase="train",
                         epoch=epoch,
-                        total_epochs=config.epochs,
+                        total_epochs=total_epochs,
                         step=step_number,
                         total_steps=total_steps,
                         loss=loss_value,
@@ -408,6 +441,8 @@ def run_worker(
             loss_value,
             total_steps,
             bundle=bundle,
+            base_epochs=config.epochs,
+            refinement_epochs=5 if refinement_loader is not None else 0,
         )
         terminal_message = (
             f"Training completed; steps={total_steps}; final_loss={loss_value:.6f}; "
@@ -525,6 +560,8 @@ def _write_staged_artifacts(
     total_steps: int,
     *,
     bundle: TrainingInputBundle | None = None,
+    base_epochs: int,
+    refinement_epochs: int,
 ) -> None:
     spatial_v4 = bundle is not None and config.training_policy == "spatial_mil_v4"
     checkpoint = {
@@ -591,6 +628,13 @@ def _write_staged_artifacts(
                 },
             }
         )
+        if refinement_epochs:
+            checkpoint["hard_negative_refinement"] = {
+                "selection_sha256": config.hard_negative_selection_sha256,
+                "priority_normal_bag_ids": list(config.priority_normal_bag_ids),
+                "base_epochs": base_epochs,
+                "refinement_epochs": refinement_epochs,
+            }
     elif bundle is not None and bundle.version == 2:
         checkpoint.update(
             {
@@ -603,16 +647,19 @@ def _write_staged_artifacts(
     metrics_path = staging / "metrics.json"
     manifest_path = staging / "manifest.json"
     torch.save(checkpoint, model_path)
+    metrics = {
+        "architecture": "resnet18_spatial_logits" if spatial_v4 else "resnet18",
+        "epochs": base_epochs + refinement_epochs,
+        "steps": total_steps,
+        "final_loss": final_loss,
+        "batch_size": config.batch_size,
+        "device": str(device),
+    }
+    if refinement_epochs:
+        metrics.update({"base_epochs": base_epochs, "refinement_epochs": refinement_epochs})
     metrics_path.write_text(
         json.dumps(
-            {
-                "architecture": "resnet18",
-                "epochs": config.epochs,
-                "steps": total_steps,
-                "final_loss": final_loss,
-                "batch_size": config.batch_size,
-                "device": str(device),
-            },
+            metrics,
             sort_keys=True,
             separators=(",", ":"),
         ),

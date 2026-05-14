@@ -14,6 +14,57 @@ from wafer_defect_studio.training_protocol import (
 
 
 class TrainingProtocolTest(unittest.TestCase):
+    def test_hard_negative_refinement_values_round_trip_and_reject_legacy(self):
+        digest = "AB" * 32
+        config = TrainingConfig(
+            snapshot_id="snapshot-1", split_id="split-1", class_count=1,
+            epochs=2, batch_size=1, patch_size=32, patch_stride=32,
+            training_policy="spatial_mil_v4",
+            priority_normal_bag_ids=["bag-b", "bag-a"],
+            hard_negative_selection_sha256=digest,
+        )
+        self.assertEqual(config.priority_normal_bag_ids, ("bag-b", "bag-a"))
+        self.assertEqual(config.hard_negative_selection_sha256, digest.lower())
+        self.assertEqual(config.to_dict()["priority_normal_bag_ids"], ["bag-b", "bag-a"])
+        self.assertEqual(TrainingConfig.from_json(config.to_json()), config)
+        old = config.to_dict()
+        old.pop("priority_normal_bag_ids")
+        old.pop("hard_negative_selection_sha256")
+        self.assertEqual(TrainingConfig.from_dict(old).priority_normal_bag_ids, ())
+        with self.assertRaisesRegex(TrainingProtocolError, "provided together"):
+            TrainingConfig(
+                snapshot_id="snapshot-1", split_id="split-1", class_count=1,
+                epochs=1, batch_size=1, patch_size=32, patch_stride=32,
+                training_policy="spatial_mil_v4", priority_normal_bag_ids=("bag",),
+            )
+        with self.assertRaisesRegex(TrainingProtocolError, "provided together"):
+            TrainingConfig(
+                snapshot_id="snapshot-1", split_id="split-1", class_count=1,
+                epochs=1, batch_size=1, patch_size=32, patch_stride=32,
+                training_policy="spatial_mil_v4",
+                hard_negative_selection_sha256="a" * 64,
+            )
+        for bag_ids, digest, message in (
+            (("bag", "bag"), "a" * 64, "unique non-empty"),
+            (("bag",), "z" * 64, "64 hexadecimal"),
+            (("bag",), "a" * 63, "64 hexadecimal"),
+        ):
+            with self.assertRaisesRegex(TrainingProtocolError, message):
+                TrainingConfig(
+                    snapshot_id="snapshot-1", split_id="split-1", class_count=1,
+                    epochs=1, batch_size=1, patch_size=32, patch_stride=32,
+                    training_policy="spatial_mil_v4",
+                    priority_normal_bag_ids=bag_ids,
+                    hard_negative_selection_sha256=digest,
+                )
+        with self.assertRaisesRegex(TrainingProtocolError, "requires spatial_mil_v4"):
+            TrainingConfig(
+                snapshot_id="snapshot-1", split_id="split-1", class_count=1,
+                epochs=1, batch_size=1, patch_size=32, patch_stride=32,
+                priority_normal_bag_ids=("bag",),
+                hard_negative_selection_sha256="a" * 64,
+            )
+
     def test_versioned_messages_round_trip_and_keep_worker_value_only(self):
         config = TrainingConfig(
             snapshot_id="snapshot-1",

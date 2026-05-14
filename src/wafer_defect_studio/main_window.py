@@ -1718,6 +1718,8 @@ class MainWindow(QMainWindow):
                     else None
                 ),
                 training_policy=request.config.training_policy,
+                priority_normal_bag_ids=request.config.priority_normal_bag_ids,
+                hard_negative_selection_sha256=request.config.hard_negative_selection_sha256,
             )
             run = create_training_run(project_path, run_config, run_id=run_id)
             update_training_run_terminal(
