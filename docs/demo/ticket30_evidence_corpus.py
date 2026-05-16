@@ -6,11 +6,13 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 
+import numpy as np
+
 from docs.demo.defect_oracle import DefectOracle, Particle, Scratch
 
 SEEDS = (17, 42, 91)
 CLASS_CODES = ("scratch", "particle")
-FROZEN_CORPUS_SHA256 = "9a2557b59b77d1789624a3290b273e83b8512568b1b5c456fd8123114c45a3e1"
+FROZEN_CORPUS_SHA256 = "e733096ecf3bc52970ea88bb20d1d2dbeea36c6a64ed3fcf15ee98467c6cc0b8"
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,7 @@ class EvidenceCase:
     split: str
     instances: tuple[EvidenceInstance, ...]
     oracle: DefectOracle
+    pixel_sha256: str
 
 
 def build_ticket30_evidence_corpus() -> tuple[EvidenceCase, ...]:
@@ -36,8 +39,8 @@ def build_ticket30_evidence_corpus() -> tuple[EvidenceCase, ...]:
                 f"ticket30-{seed}-scratch-{index:03d}",
                 Scratch(
                     "scratch",
-                    ((30 + index % 15 * 98, 30 + index // 15 * 145 + seed_index * 3),
-                     (50 + index % 15 * 98, 30 + index // 15 * 145 + seed_index * 3)),
+                    ((20 + index % 15 * 32, 20 + index // 15 * 45 + seed_index),
+                     (40 + index % 15 * 32, 20 + index // 15 * 45 + seed_index)),
                     2,
                 ),
             )
@@ -48,22 +51,18 @@ def build_ticket30_evidence_corpus() -> tuple[EvidenceCase, ...]:
                 f"ticket30-{seed}-particle-{index:03d}",
                 Particle(
                     "particle",
-                    (60 + index % 15 * 96, 80 + index // 15 * 140 + seed_index * 3),
+                    (1044 + index % 15 * 32, 1044 + index // 15 * 45 + seed_index),
                     3,
                 ),
             )
             for index in range(150)
         )
         instances = scratches + particles
-        cases.append(
-            EvidenceCase(
-                seed,
-                f"ticket30-evidence-{seed}.png",
-                "test",
-                instances,
-                DefectOracle(1536, 1536, tuple(instance.defect for instance in instances)),
-            )
-        )
+        oracle = DefectOracle(1536, 1536, tuple(instance.defect for instance in instances))
+        cases.append(EvidenceCase(
+            seed, f"ticket30-evidence-{seed}.png", "test", instances, oracle,
+            _pixel_sha256(render_ticket30_evidence_pixels(oracle)),
+        ))
     return tuple(cases)
 
 
@@ -79,6 +78,7 @@ def serialize_ticket30_evidence_corpus(corpus: tuple[EvidenceCase, ...]) -> str:
                 "split": case.split,
                 "image_width": case.oracle.image_width,
                 "image_height": case.oracle.image_height,
+                "pixel_sha256": case.pixel_sha256,
                 "instances": [
                     {
                         "instance_id": instance.instance_id,
@@ -98,6 +98,46 @@ def serialize_ticket30_evidence_corpus(corpus: tuple[EvidenceCase, ...]) -> str:
 
 def hash_ticket30_evidence_corpus(corpus: tuple[EvidenceCase, ...]) -> str:
     return hashlib.sha256(serialize_ticket30_evidence_corpus(corpus).encode("utf-8")).hexdigest()
+
+
+def render_ticket30_evidence_pixels(oracle: DefectOracle) -> np.ndarray:
+    """Render deterministic grayscale pixels directly from the frozen oracle."""
+
+    pixels = np.full((oracle.image_height, oracle.image_width), 128, dtype=np.uint8)
+    for defect in oracle.defects:
+        if isinstance(defect, Scratch):
+            for start, end in zip(defect.points, defect.points[1:]):
+                _paint_segment(pixels, start, end, defect.radius, 24)
+        else:
+            _paint_disk(pixels, defect.center, defect.radius, 232)
+    return pixels
+
+
+def _pixel_sha256(pixels: np.ndarray) -> str:
+    return hashlib.sha256(pixels.tobytes()).hexdigest()
+
+
+def _paint_disk(pixels: np.ndarray, center: tuple[int, int], radius: int, value: int) -> None:
+    x, y = center
+    top, bottom = max(0, y - radius), min(pixels.shape[0] - 1, y + radius)
+    left, right = max(0, x - radius), min(pixels.shape[1] - 1, x + radius)
+    yy, xx = np.ogrid[top : bottom + 1, left : right + 1]
+    region = pixels[top : bottom + 1, left : right + 1]
+    region[(xx - x) ** 2 + (yy - y) ** 2 <= radius ** 2] = value
+
+
+def _paint_segment(
+    pixels: np.ndarray, start: tuple[int, int], end: tuple[int, int], radius: int, value: int
+) -> None:
+    x0, y0 = start
+    x1, y1 = end
+    top, bottom = max(0, min(y0, y1) - radius), min(pixels.shape[0] - 1, max(y0, y1) + radius)
+    left, right = max(0, min(x0, x1) - radius), min(pixels.shape[1] - 1, max(x0, x1) + radius)
+    yy, xx = np.ogrid[top : bottom + 1, left : right + 1]
+    dx, dy = x1 - x0, y1 - y0
+    t = np.clip(((xx - x0) * dx + (yy - y0) * dy) / (dx * dx + dy * dy), 0, 1)
+    region = pixels[top : bottom + 1, left : right + 1]
+    region[(xx - (x0 + t * dx)) ** 2 + (yy - (y0 + t * dy)) ** 2 <= radius ** 2] = value
 
 
 def resolve_ticket30_evidence_corpus(serialized: str, expected_sha256: str) -> tuple[EvidenceCase, ...]:
@@ -132,7 +172,10 @@ def _case_from_payload(payload: dict) -> EvidenceCase:
     oracle = DefectOracle(
         payload["image_width"], payload["image_height"], tuple(value.defect for value in instances)
     )
-    return EvidenceCase(payload["seed"], payload["filename"], payload["split"], tuple(instances), oracle)
+    return EvidenceCase(
+        payload["seed"], payload["filename"], payload["split"], tuple(instances), oracle,
+        payload["pixel_sha256"],
+    )
 
 
 def _validate(payload: dict, cases: tuple[EvidenceCase, ...]) -> None:
@@ -156,6 +199,12 @@ def _validate(payload: dict, cases: tuple[EvidenceCase, ...]) -> None:
         if counts != {"scratch": 150, "particle": 150}:
             raise ValueError(
                 f"ticket30 evidence corpus instance count drift: seed={case.seed} actual={counts!r}"
+            )
+        actual_pixel_sha256 = _pixel_sha256(render_ticket30_evidence_pixels(case.oracle))
+        if actual_pixel_sha256 != case.pixel_sha256:
+            raise ValueError(
+                "ticket30 evidence pixel SHA-256 mismatch: "
+                f"expected={case.pixel_sha256} actual={actual_pixel_sha256}"
             )
     instance_ids = tuple(instance.instance_id for instance in instances)
     if len(set(instance_ids)) != len(instance_ids):

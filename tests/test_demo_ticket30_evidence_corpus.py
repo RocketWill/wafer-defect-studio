@@ -2,6 +2,10 @@ import hashlib
 import json
 import unittest
 
+import numpy as np
+
+from wafer_defect_studio.grid_geometry import annotation_grids
+
 from docs.demo.ticket30_evidence_corpus import (
     CLASS_CODES,
     FROZEN_CORPUS_SHA256,
@@ -9,6 +13,7 @@ from docs.demo.ticket30_evidence_corpus import (
     build_ticket30_evidence_corpus,
     hash_ticket30_evidence_corpus,
     resolve_ticket30_evidence_corpus,
+    render_ticket30_evidence_pixels,
     serialize_ticket30_evidence_corpus,
 )
 
@@ -68,6 +73,13 @@ class Ticket30EvidenceCorpusTest(unittest.TestCase):
                     for index, (left_a, top_a, right_a, bottom_a) in enumerate(boxes)
                     for left_b, top_b, right_b, bottom_b in boxes[index + 1 :]
                 ))
+            truth = case.oracle.grid_truth(annotation_grids(1536, 1536, 512, 512))
+            self.assertGreater(sum("scratch" in codes for codes in truth.values()), 0)
+            self.assertGreater(sum("scratch" not in codes for codes in truth.values()), 0)
+            self.assertGreater(sum("particle" in codes for codes in truth.values()), 0)
+            self.assertGreater(sum("particle" not in codes for codes in truth.values()), 0)
+            self.assertTrue(any(codes == ("scratch",) for codes in truth.values()))
+            self.assertTrue(any(codes == ("particle",) for codes in truth.values()))
 
     def test_canonical_serialization_hash_and_resolver_reject_drift_with_context(self):
         corpus = build_ticket30_evidence_corpus()
@@ -90,6 +102,26 @@ class Ticket30EvidenceCorpusTest(unittest.TestCase):
             tampered_hash = hashlib.sha256(tampered.encode("utf-8")).hexdigest()
             with self.subTest(drift=drift), self.assertRaisesRegex(ValueError, message):
                 resolve_ticket30_evidence_corpus(tampered, tampered_hash)
+
+    def test_renderer_is_deterministic_and_resolver_rejects_pixel_drift(self):
+        first = build_ticket30_evidence_corpus()
+        second = build_ticket30_evidence_corpus()
+        for left, right in zip(first, second):
+            left_pixels = render_ticket30_evidence_pixels(left.oracle)
+            right_pixels = render_ticket30_evidence_pixels(right.oracle)
+            self.assertEqual(left_pixels.dtype, np.uint8)
+            self.assertTrue(np.array_equal(left_pixels, right_pixels))
+            self.assertEqual(left.pixel_sha256, right.pixel_sha256)
+            self.assertLess(left_pixels.min(), 128)
+            self.assertGreater(left_pixels.max(), 128)
+
+        payload = json.loads(serialize_ticket30_evidence_corpus(first))
+        payload["cases"][0]["pixel_sha256"] = "0" * 64
+        tampered = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        with self.assertRaisesRegex(ValueError, "pixel SHA-256 mismatch"):
+            resolve_ticket30_evidence_corpus(
+                tampered, hashlib.sha256(tampered.encode("utf-8")).hexdigest()
+            )
 
 
 if __name__ == "__main__":
