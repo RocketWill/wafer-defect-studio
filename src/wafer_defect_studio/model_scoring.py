@@ -51,11 +51,18 @@ def score_training_bundle(
         )
     except ValueError as error:
         raise ModelScoringError(str(error)) from error
-    is_patch_bag_checkpoint = checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v3"
+    checkpoint_format = checkpoint["checkpoint_format"]
+    is_patch_bag_checkpoint = checkpoint_format in {
+        "wafer_defect_studio.resnet18.v3",
+        "wafer_defect_studio.resnet18.v4",
+    }
+    is_spatial_checkpoint = checkpoint_format == "wafer_defect_studio.resnet18.v4"
     input_size = checkpoint["input_size"]
     if is_patch_bag_checkpoint:
         if bundle.version != 2:
-            raise ModelScoringError("resnet18.v3 checkpoint requires a Patch Bag bundle")
+            raise ModelScoringError(
+                f"{checkpoint_format} checkpoint requires a Patch Bag bundle"
+            )
         if any(
             rect.width != checkpoint["patch_size"] or rect.height != checkpoint["patch_size"]
             for bag in bundle.patch_bags
@@ -78,8 +85,12 @@ def score_training_bundle(
         if is_patch_bag_checkpoint:
             for index in range(len(dataset)):
                 inputs, target = dataset[index]
-                patch_logits = model(inputs.to(resolved_device)).unsqueeze(0)
-                logits = max_pool_patch_logits(patch_logits)
+                patch_logits = model(inputs.to(resolved_device))
+                logits = (
+                    torch.amax(patch_logits, dim=(0, 2, 3)).unsqueeze(0)
+                    if is_spatial_checkpoint
+                    else max_pool_patch_logits(patch_logits.unsqueeze(0))
+                )
                 true_batches.append(target.unsqueeze(0).numpy())
                 score_batches.append(torch.sigmoid(logits).cpu().numpy())
         else:

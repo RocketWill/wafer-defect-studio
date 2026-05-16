@@ -11,7 +11,7 @@ from PySide6.QtGui import QImage
 from wafer_defect_studio.dataset_snapshot import SnapshotSample
 from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.model_registry import create_resnet18
-from wafer_defect_studio.model_scoring import score_training_bundle
+from wafer_defect_studio.model_scoring import ModelScoringError, score_training_bundle
 from wafer_defect_studio.normalization import NormalizationBounds
 from wafer_defect_studio.training_input_bundle import (
     TrainingBundleSource,
@@ -21,6 +21,65 @@ from wafer_defect_studio.training_input_bundle import (
 
 
 class ModelScoringTest(unittest.TestCase):
+    def test_v4_scores_one_row_per_grid_from_maximum_spatial_patch_logits(self):
+        class CraftedSpatialScorer(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+
+            def forward(self, inputs):
+                self.assert_shape = tuple(inputs.shape)
+                return torch.tensor(
+                    (
+                        (((-2.0, 2.0), (0.0, 1.0)), ((-3.0, -1.0), (-2.0, -4.0))),
+                        (((-4.0, -3.0), (-2.0, -1.0)), ((1.0, 0.0), (4.0, 2.0))),
+                    )
+                )
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "source.png"
+            image = QImage(64, 32, QImage.Format.Format_Grayscale8)
+            bits = image.bits()
+            stride = image.bytesPerLine()
+            for row in range(32):
+                bits[row * stride : (row + 1) * stride] = bytes(range(64))
+            self.assertTrue(image.save(str(source), "PNG"))
+            del bits, image
+            bundle = TrainingInputBundle(
+                "snapshot-v4",
+                "split-v4",
+                ("scratch", "particle"),
+                (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+                (TrainingBundleSource("validation-image", "validation", str(source), _hash(source), "uint8"),),
+                (),
+                2,
+                (TrainingPatchBag("validation-0", "validation-image", 0, 0, (Rect(0, 0, 32, 32), Rect(32, 0, 32, 32)), ("scratch", "particle")),),
+            )
+            bundle_path = root / "bundle.json"
+            bundle_path.write_text(bundle.to_json(), encoding="utf-8")
+            model = CraftedSpatialScorer()
+            checkpoint = {
+                "checkpoint_format": "wafer_defect_studio.resnet18.v4",
+                "class_codes": ["scratch", "particle"],
+                "input_size": {"width": 32, "height": 32},
+                "patch_size": 32,
+                "patch_stride": 32,
+            }
+
+            with patch(
+                "wafer_defect_studio.model_scoring.load_project_checkpoint",
+                return_value=(model, checkpoint),
+            ):
+                scores = score_training_bundle(bundle_path, root / "model.pt", split="validation")
+
+            np.testing.assert_array_equal(scores.y_true, ((1.0, 1.0),))
+            np.testing.assert_allclose(
+                scores.y_score,
+                torch.sigmoid(torch.tensor(((2.0, 4.0),))).numpy(),
+            )
+            self.assertEqual(model.assert_shape, (2, 3, 32, 32))
+
     def test_v3_scores_one_row_per_grid_after_max_pooling_raw_patch_logits(self):
         class CraftedPatchScorer(torch.nn.Module):
             def __init__(self):
@@ -147,6 +206,24 @@ class ModelScoringTest(unittest.TestCase):
             )
             bundle_path = root / "bundle.json"
             bundle_path.write_text(bundle.to_json(), encoding="utf-8")
+            with patch(
+                "wafer_defect_studio.model_scoring.load_project_checkpoint",
+                return_value=(
+                    model,
+                    {
+                        "checkpoint_format": "wafer_defect_studio.resnet18.v4",
+                        "class_codes": ["scratch", "particle"],
+                        "input_size": {"width": 32, "height": 32},
+                        "patch_size": 32,
+                        "patch_stride": 32,
+                    },
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    ModelScoringError,
+                    r"wafer_defect_studio\.resnet18\.v4 checkpoint requires a Patch Bag bundle",
+                ):
+                    score_training_bundle(bundle_path, checkpoint_path, split="validation")
             scores = score_training_bundle(bundle_path, checkpoint_path, split="validation")
             np.testing.assert_array_equal(scores.y_true, [[0.0, 1.0]])
             np.testing.assert_allclose(scores.y_score, [[0.5, 0.5]])
