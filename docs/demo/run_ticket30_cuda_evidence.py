@@ -6,8 +6,13 @@ import argparse
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable, Mapping
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 
 from docs.demo.ticket30_cuda_evidence import (
     EXPECTED_GPU,
@@ -94,7 +99,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--source-image", type=Path,
-        default=Path(__file__).resolve().parents[2] / REPLAY_CONFIG["source_asset"]["path"],
+        default=REPO / REPLAY_CONFIG["source_asset"]["path"],
     )
     parser.add_argument("--git-commit")
     return parser.parse_args()
@@ -108,7 +113,7 @@ def main() -> int:
     source = args.source_image.expanduser().resolve()
     assert_ticket30_source_asset(source)
     git_commit = args.git_commit or subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2],
+        ["git", "rev-parse", "HEAD"], cwd=REPO,
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     run_ticket30_cuda_evidence(

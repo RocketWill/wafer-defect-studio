@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +10,15 @@ from docs.demo.ticket30_cuda_evidence import validate_completed_ticket30_cuda_ev
 
 
 class Ticket30CudaRunnerTest(unittest.TestCase):
+    def test_script_entrypoint_imports_from_repo_root(self):
+        result = subprocess.run(
+            [sys.executable, "docs/demo/run_ticket30_cuda_evidence.py", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_runs_each_frozen_stage_and_publishes_content_addressed_manifest(self):
         calls = []
 
