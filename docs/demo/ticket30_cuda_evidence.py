@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 
 from docs.demo.ticket30_evidence_corpus import CLASS_CODES, FROZEN_CORPUS_SHA256, SEEDS
 
@@ -16,6 +17,15 @@ SCORE_DOMAINS = {
     "spatial_mil_v4": "absolute_spatial_probability",
 }
 BASE_ARTIFACTS = ("checkpoint", "threshold", "map", "metrics")
+REPLAY_CONFIG = {
+    "source_asset": {
+        "path": "docs/demo/assets/realistic-wafer-20mp.png",
+        "sha256": "6cc5df01674a94458355aa7993bc458edffc39636d22c497b7d7bb2eda2a1e6b",
+    },
+    "grid": {"width": 512, "height": 512},
+    "training": {"batch_size": 4, "learning_rate": 0.001},
+    "detection": {"reflect_padding": True, "center_weighting": "linear"},
+}
 
 
 def build_ticket30_cuda_evidence_plan(git_commit: str) -> dict:
@@ -30,11 +40,17 @@ def build_ticket30_cuda_evidence_plan(git_commit: str) -> dict:
                 "epochs": 20,
                 "weights": "imagenet",
                 "score_domain": SCORE_DOMAINS[model],
+                "detection_geometry": {
+                    "window_size": 512 if model == "cam_v2" else 128,
+                    "window_stride": 512 if model == "cam_v2" else 64,
+                },
             }
             if model in ("patch_v3", "spatial_mil_v4"):
                 run["geometry"] = {"patch_size": 128, "patch_stride": 64}
             if model == "spatial_mil_v4":
                 run["refinement_epochs"] = 5
+                run["hard_negative_max_bags"] = 32
+                run["refinement_semantics"] = "selection_probe_then_fresh_20_plus_5"
             runs.append(run)
     return {
         "schema_version": 1,
@@ -44,6 +60,7 @@ def build_ticket30_cuda_evidence_plan(git_commit: str) -> dict:
         "gpu": EXPECTED_GPU,
         "class_codes": list(CLASS_CODES),
         "stage_order": list(STAGE_ORDER),
+        "replay_config": deepcopy(REPLAY_CONFIG),
         "runs": runs,
     }
 
@@ -62,7 +79,7 @@ def validate_completed_ticket30_cuda_evidence_manifest(manifest: dict) -> dict:
     expected = build_ticket30_cuda_evidence_plan(manifest.get("git_commit"))
     if set(manifest) != set(expected):
         raise ValueError("ticket30 evidence manifest fields drift")
-    for field in ("schema_version", "corpus_sha256", "device", "gpu", "class_codes", "stage_order"):
+    for field in ("schema_version", "corpus_sha256", "device", "gpu", "class_codes", "stage_order", "replay_config"):
         if manifest.get(field) != expected[field]:
             label = {"device": "CUDA device", "gpu": "GPU"}.get(field, field.replace("_", " "))
             raise ValueError(f"ticket30 evidence {label} drift")
@@ -79,7 +96,7 @@ def validate_completed_ticket30_cuda_evidence_manifest(manifest: dict) -> dict:
             raise ValueError(f"ticket30 evidence run fields drift: seed={planned['seed']} model={planned['model']}")
         for field, value in planned.items():
             if run.get(field) != value:
-                label = "score domain" if field == "score_domain" else field
+                label = field.replace("_", " ")
                 raise ValueError(f"ticket30 evidence {label} drift: seed={planned['seed']} model={planned['model']}")
         required = set(BASE_ARTIFACTS)
         if planned["model"] == "spatial_mil_v4":
