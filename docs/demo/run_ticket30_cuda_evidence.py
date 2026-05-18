@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -15,6 +16,7 @@ from docs.demo.ticket30_cuda_evidence import (
     serialize_ticket30_cuda_evidence_manifest,
     validate_completed_ticket30_cuda_evidence_manifest,
 )
+from docs.demo.ticket30_cuda_evidence import REPLAY_CONFIG
 
 StageExecutor = Callable[[str, Mapping[str, object], Path, Path], Mapping[str, Path]]
 
@@ -78,20 +80,41 @@ def assert_ticket30_cuda_device() -> None:
         raise RuntimeError(f"Ticket 30 evidence requires exact GPU {EXPECTED_GPU!r}; actual={actual!r}")
 
 
+def assert_ticket30_source_asset(source_image: Path) -> None:
+    expected = REPLAY_CONFIG["source_asset"]["sha256"]
+    actual = hashlib.sha256(source_image.read_bytes()).hexdigest()
+    if actual != expected:
+        raise RuntimeError(
+            f"Ticket 30 source asset SHA-256 mismatch: expected={expected} actual={actual}"
+        )
+
+
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--source-image", type=Path, required=True)
-    parser.add_argument("--git-commit", required=True)
+    parser.add_argument(
+        "--source-image", type=Path,
+        default=Path(__file__).resolve().parents[2] / REPLAY_CONFIG["source_asset"]["path"],
+    )
+    parser.add_argument("--git-commit")
     return parser.parse_args()
 
 
 def main() -> int:
+    from docs.demo.ticket30_real_executor import create_ticket30_real_executor
+
     args = _arguments()
     assert_ticket30_cuda_device()
-    raise RuntimeError(
-        "Ticket 30 real stage executor is not connected; use the next execution slice before publishing evidence"
+    source = args.source_image.expanduser().resolve()
+    assert_ticket30_source_asset(source)
+    git_commit = args.git_commit or subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    run_ticket30_cuda_evidence(
+        args.output, source, git_commit, executor=create_ticket30_real_executor()
     )
+    return 0
 
 
 if __name__ == "__main__":
