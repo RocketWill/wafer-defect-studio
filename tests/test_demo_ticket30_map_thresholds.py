@@ -80,6 +80,14 @@ class Ticket30MapThresholdsTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resolve_map_thresholds(changed, self.codes, "absolute_spatial_probability", self.cases)
 
+    def test_artifact_records_reduced_quality_breakpoint_policy(self):
+        payload = calibrate_map_thresholds(self.cases, self.codes, "patch_sigmoid")
+
+        self.assertEqual(
+            payload["candidate_policy"],
+            "sorted_unique_finite_per_grid_and_per_defect_support_maxima_plus_0_and_1; map>=threshold",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

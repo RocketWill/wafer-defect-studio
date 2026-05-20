@@ -74,6 +74,57 @@ class SpatialThresholdsTest(unittest.TestCase):
         self.assertEqual(first["selected"]["particle"]["threshold"], 0.8)
         self.assertFalse(first["selected"]["particle"]["target_satisfied"])
 
+    def test_reduced_candidates_match_all_unique_reference_for_feasible_and_fallback(self):
+        cases = self.cases + (
+            WaferEvidenceCase(
+                "noise.png",
+                "validation",
+                DefectOracle(4, 2, (Particle("particle", (0, 0), 0),)),
+                annotation_grids(4, 2, 2, 2),
+                numpy.array([[[0.81, 0.8], [0.61, 0.79], [0.41, 0.78], [0.21, 0.77]],
+                             [[0.11, 0.76], [0.09, 0.75], [0.07, 0.74], [0.05, 0.73]]]),
+            ),
+        )
+        actual = calibrate_spatial_thresholds(cases, ("scratch", "particle"))
+
+        for class_index, code in enumerate(("scratch", "particle")):
+            evaluated = []
+            values = sorted({0.0, 1.0} | {
+                float(value) for case in cases for value in case.absolute_maps[:, :, class_index].flat
+                if numpy.isfinite(value)
+            })
+            for threshold in values:
+                metrics = compute_wafer_quality_evidence(
+                    cases,
+                    ("scratch", "particle"),
+                    {candidate: threshold if candidate == code else 1.0 for candidate in ("scratch", "particle")},
+                )["per_class"][code]
+                targets = actual["targets"]
+                feasible = all((
+                    metrics["defect_coverage_recall"] is not None and metrics["defect_coverage_recall"] >= targets["defect_coverage_recall"],
+                    metrics["grid_precision"] is not None and metrics["grid_precision"] >= targets["grid_precision"],
+                    metrics["grid_recall"] is not None and metrics["grid_recall"] >= targets["grid_recall"],
+                    metrics["normal_grid_leak_rate"] is not None and metrics["normal_grid_leak_rate"] <= targets["normal_grid_leak_rate"],
+                    metrics["asserted_grid_occupancy_p95"] is not None and metrics["asserted_grid_occupancy_p95"] <= targets["asserted_grid_occupancy_p95"],
+                ))
+                evaluated.append((threshold, metrics, feasible))
+            feasible = [entry for entry in evaluated if entry[2]]
+            if feasible:
+                expected = max(feasible, key=lambda entry: entry[0])
+                self.assertTrue(actual["selected"][code]["target_satisfied"])
+            else:
+                def fallback(entry):
+                    metrics, threshold = entry[1], entry[0]
+                    value = lambda name: float("-inf") if metrics[name] is None else float(metrics[name])
+                    precision, recall = value("grid_precision"), value("grid_recall")
+                    leakage, occupancy = value("normal_grid_leak_rate"), value("asserted_grid_occupancy_p95")
+                    return (value("defect_coverage_recall"), min(precision, recall), precision, recall,
+                            -leakage if leakage != float("-inf") else float("-inf"),
+                            -occupancy if occupancy != float("-inf") else float("-inf"), threshold)
+                expected = max(evaluated, key=fallback)
+            self.assertEqual(actual["selected"][code]["threshold"], expected[0])
+            self.assertEqual(actual["selected"][code]["metrics"], expected[1])
+
     def test_rejects_non_validation_source_and_wrong_domain_or_class_order(self):
         with self.assertRaisesRegex(ValueError, "validation"):
             calibrate_spatial_thresholds(self.cases, ("scratch", "particle"), source_split="train")

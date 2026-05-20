@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 
 import numpy
 
-from docs.demo.defect_oracle import DefectOracle, defect_intersects_rectangle
+from docs.demo.defect_oracle import DefectOracle, Particle, Scratch, defect_intersects_rectangle
 from wafer_defect_studio.grid_geometry import AnnotationGrid
 
 
@@ -48,8 +48,17 @@ def compute_wafer_quality_evidence(
                 if defect.class_code != code:
                     continue
                 class_totals["instances"] += 1
-                ys, xs = numpy.nonzero(retained)
-                if any(defect_intersects_rectangle(defect, int(x), int(y), int(x + 1), int(y + 1)) for y, x in zip(ys, xs)):
+                left, top, right, bottom = _defect_pixel_bounds(
+                    defect, case.oracle.image_width, case.oracle.image_height
+                )
+                local = retained[top:bottom, left:right]
+                ys, xs = numpy.nonzero(local)
+                if any(
+                    defect_intersects_rectangle(
+                        defect, int(x + left), int(y + top), int(x + left + 1), int(y + top + 1)
+                    )
+                    for y, x in zip(ys, xs)
+                ):
                     class_totals["covered"] += 1
             for grid in case.grids:
                 left, top = max(0, grid.x), max(0, grid.y)
@@ -95,6 +104,57 @@ def compute_wafer_quality_evidence(
             ),
         }
     return {"case_count": len(cases), "per_class": per_class}
+
+
+def quality_relevant_threshold_candidates(
+    cases: Sequence[WaferEvidenceCase], class_index: int
+) -> tuple[float, ...]:
+    """Return inclusive thresholds where Grid prediction or defect coverage changes."""
+
+    candidates = {0.0, 1.0}
+    for case in cases:
+        class_map = numpy.asarray(case.absolute_maps)[:, :, class_index]
+        for grid in case.grids:
+            left, top = max(0, grid.x), max(0, grid.y)
+            right = min(case.oracle.image_width, grid.x + grid.width)
+            bottom = min(case.oracle.image_height, grid.y + grid.height)
+            _add_finite_max(candidates, class_map[top:bottom, left:right])
+        for defect in case.oracle.defects:
+            left, top, right, bottom = _defect_pixel_bounds(
+                defect, case.oracle.image_width, case.oracle.image_height
+            )
+            support_values = (
+                class_map[y, x]
+                for y in range(top, bottom)
+                for x in range(left, right)
+                if defect_intersects_rectangle(defect, x, y, x + 1, y + 1)
+            )
+            finite_values = (float(value) for value in support_values if numpy.isfinite(value))
+            maximum = max(finite_values, default=None)
+            if maximum is not None:
+                candidates.add(maximum)
+    return tuple(sorted(candidates))
+
+
+def _add_finite_max(candidates: set[float], values: numpy.ndarray) -> None:
+    finite = values[numpy.isfinite(values)]
+    if finite.size:
+        candidates.add(float(finite.max()))
+
+
+def _defect_pixel_bounds(
+    defect: Scratch | Particle, image_width: int, image_height: int
+) -> tuple[int, int, int, int]:
+    if isinstance(defect, Particle):
+        xs, ys = (defect.center[0],), (defect.center[1],)
+    else:
+        xs, ys = zip(*defect.points)
+    return (
+        max(0, min(xs) - defect.radius - 1),
+        max(0, min(ys) - defect.radius - 1),
+        min(image_width, max(xs) + defect.radius + 1),
+        min(image_height, max(ys) + defect.radius + 1),
+    )
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:

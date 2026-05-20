@@ -10,7 +10,11 @@ from typing import Mapping, Sequence
 import numpy
 
 from docs.demo.spatial_thresholds import CANDIDATE_POLICY, TARGETS
-from docs.demo.wafer_quality_evidence import WaferEvidenceCase, compute_wafer_quality_evidence
+from docs.demo.wafer_quality_evidence import (
+    WaferEvidenceCase,
+    compute_wafer_quality_evidence,
+    quality_relevant_threshold_candidates,
+)
 
 
 SCHEMA = "ticket30-map-thresholds.v1"
@@ -34,16 +38,15 @@ def calibrate_map_thresholds(
     codes = tuple(class_codes)
     selected = {}
     for class_index, code in enumerate(codes):
-        values = {
-            float(value)
+        finite_ranges = [
+            values[numpy.isfinite(values)]
             for case in validation_cases
-            for value in numpy.asarray(case.absolute_maps)[:, :, class_index].flat
-            if numpy.isfinite(value)
-        }
-        if any(not 0 <= value <= 1 for value in values):
+            for values in (numpy.asarray(case.absolute_maps)[:, :, class_index],)
+        ]
+        if any(values.size and (values.min() < 0 or values.max() > 1) for values in finite_ranges):
             raise ValueError(f"{code}: map threshold candidates must be in [0, 1]")
         evaluated = []
-        for threshold in sorted(values | {0.0, 1.0}):
+        for threshold in quality_relevant_threshold_candidates(validation_cases, class_index):
             thresholds = {candidate: (threshold if candidate == code else 1.0) for candidate in codes}
             metrics = compute_wafer_quality_evidence(validation_cases, codes, thresholds)["per_class"][code]
             evaluated.append((threshold, metrics, _target_satisfied(metrics)))

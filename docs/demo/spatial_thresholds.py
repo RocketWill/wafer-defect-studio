@@ -7,14 +7,16 @@ from math import inf, isfinite
 from numbers import Real
 from typing import Mapping, Sequence
 
-import numpy
-
-from docs.demo.wafer_quality_evidence import WaferEvidenceCase, compute_wafer_quality_evidence
+from docs.demo.wafer_quality_evidence import (
+    WaferEvidenceCase,
+    compute_wafer_quality_evidence,
+    quality_relevant_threshold_candidates,
+)
 
 
 SCHEMA = "spatial-map-thresholds.v1"
 SCORE_DOMAIN = "absolute_spatial_probability"
-CANDIDATE_POLICY = "sorted_unique_finite_map_values_plus_0_and_1; map>=threshold"
+CANDIDATE_POLICY = "sorted_unique_finite_per_grid_and_per_defect_support_maxima_plus_0_and_1; map>=threshold"
 TARGETS = {
     "defect_coverage_recall": 1.0,
     "grid_precision": 0.95,
@@ -39,14 +41,7 @@ def calibrate_spatial_thresholds(
     codes = tuple(class_codes)
     selected = {}
     for class_index, code in enumerate(codes):
-        candidates = sorted(
-            {0.0, 1.0}.union(
-                float(value)
-                for case in validation_cases
-                for value in numpy.asarray(case.absolute_maps)[:, :, class_index].flat
-                if numpy.isfinite(value)
-            )
-        )
+        candidates = quality_relevant_threshold_candidates(validation_cases, class_index)
         evaluated = []
         for threshold in candidates:
             thresholds = {candidate_code: (threshold if candidate_code == code else 1.0) for candidate_code in codes}

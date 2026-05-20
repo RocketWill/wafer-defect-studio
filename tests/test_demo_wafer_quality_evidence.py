@@ -2,8 +2,12 @@ import unittest
 
 import numpy
 
-from docs.demo.defect_oracle import DefectOracle, Particle, Scratch
-from docs.demo.wafer_quality_evidence import WaferEvidenceCase, compute_wafer_quality_evidence
+from docs.demo.defect_oracle import DefectOracle, Particle, Scratch, defect_intersects_rectangle
+from docs.demo.wafer_quality_evidence import (
+    WaferEvidenceCase,
+    compute_wafer_quality_evidence,
+    quality_relevant_threshold_candidates,
+)
 from wafer_defect_studio.grid_geometry import annotation_grids
 
 
@@ -119,6 +123,58 @@ class WaferQualityEvidenceTest(unittest.TestCase):
 
         self.assertEqual(metrics["grid_fn"], 1)
         self.assertEqual(metrics["asserted_grid_occupancy_p95"], 0.0)
+
+    def test_quality_candidates_are_only_grid_and_exact_defect_support_maxima(self):
+        case = WaferEvidenceCase(
+            "large.png",
+            "validation",
+            DefectOracle(
+                1536,
+                1536,
+                (
+                    Scratch("scratch", ((10, 10), (20, 10)), 0),
+                    Particle("scratch", (700, 700), 1),
+                ),
+            ),
+            annotation_grids(1536, 1536, 512, 512),
+            numpy.linspace(0.0, 1.0, 1536 * 1536, dtype=numpy.float32).reshape(1536, 1536, 1),
+        )
+
+        candidates = quality_relevant_threshold_candidates((case,), 0)
+
+        self.assertLessEqual(len(candidates), 2 + len(case.grids) + len(case.oracle.defects))
+        self.assertEqual(candidates, tuple(sorted(set(candidates))))
+        self.assertEqual(candidates[0], 0.0)
+        self.assertEqual(candidates[-1], 1.0)
+
+    def test_optimized_coverage_matches_naive_pixel_scan_for_each_defect_kind_and_boundary(self):
+        grids = annotation_grids(8, 4, 4, 4)
+        defects = (
+            Scratch("scratch", ((0, 0), (3, 2)), 1),
+            Particle("particle", (7, 3), 1),
+            Particle("particle", (4, 2), 0),
+        )
+        values = numpy.zeros((4, 8, 2))
+        values[0, 0, 0] = 0.9
+        values[3, 7, 1] = 0.9
+        values[2, 3, 1] = 0.9  # closed pixel rectangle contacts the point at x=4
+        case = WaferEvidenceCase("boundary.png", "validation", DefectOracle(8, 4, defects), grids, values)
+
+        result = compute_wafer_quality_evidence(
+            (case,), ("scratch", "particle"), {"scratch": 0.5, "particle": 0.5}
+        )
+        for code, class_index in (("scratch", 0), ("particle", 1)):
+            retained = numpy.isfinite(values[:, :, class_index]) & (values[:, :, class_index] >= 0.5)
+            expected = sum(
+                any(
+                    retained[y, x] and defect_intersects_rectangle(defect, x, y, x + 1, y + 1)
+                    for y in range(4)
+                    for x in range(8)
+                )
+                for defect in defects
+                if defect.class_code == code
+            )
+            self.assertEqual(result["per_class"][code]["covered_defect_instances"], expected)
 
 
 if __name__ == "__main__":
