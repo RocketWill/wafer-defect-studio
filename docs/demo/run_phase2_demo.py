@@ -29,6 +29,7 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 REPO = Path(__file__).resolve().parents[2]
 REALISTIC_PROCESSING_SIZE = 1536
+sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "src"))
 
 import numpy as np
@@ -85,8 +86,8 @@ from wafer_defect_studio.review import mark_image_reviewed
 from wafer_defect_studio.training_run import load_training_run, validate_project_checkpoint
 from wafer_defect_studio.training_scope import DataGroup, assign_image_to_data_group, save_data_groups
 
-from quality_evidence import build_comparison_report, compute_grid_quality_evidence
-from defect_oracle import DefectOracle, Particle, Scratch
+from docs.demo.quality_evidence import build_comparison_report, compute_grid_quality_evidence
+from docs.demo.defect_oracle import DefectOracle, Particle, Scratch
 
 
 def calibrated_profile_thresholds(

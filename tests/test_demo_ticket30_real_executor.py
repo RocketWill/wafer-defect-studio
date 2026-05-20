@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from docs.demo.defect_oracle import Particle, Scratch
 from docs.demo.ticket30_evidence_corpus import build_ticket30_evidence_corpus
 from docs.demo.ticket30_real_executor import _phase2_project_helpers, create_ticket30_real_executor
 from docs.demo.wafer_quality_evidence import WaferEvidenceCase
@@ -44,6 +45,19 @@ class _Backend:
 
 
 class Ticket30RealExecutorTest(unittest.TestCase):
+    def test_phase2_helpers_share_the_canonical_defect_classes(self):
+        from docs.demo.ticket30_real_executor import _phase2_project_helpers
+
+        _phase2_project_helpers()
+        from docs.demo.run_phase2_demo import REALISTIC_CORPUS_MANIFEST
+
+        self.assertTrue(
+            all(
+                isinstance(defect, (Scratch, Particle))
+                for defect in REALISTIC_CORPUS_MANIFEST[0].oracle.defects
+            )
+        )
+
     def test_production_prepare_helpers_import_from_package_execution(self):
         seed_project, prepare_annotation, create_dataset = _phase2_project_helpers()
 
