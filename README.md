@@ -35,6 +35,14 @@ path is connected:
 CAM v2 remains the default; Patch Classification v3 is optional. Both paths
 produce approximate weak localization, not pixel-accurate boundaries.
 
+Ticket 30 also has real generated held-out RTX 3090 evidence for Spatial MIL
+v4. The strict quality gate is **FAIL**; the compact report is
+[`docs/demo/ticket30-quality-gate.json`](docs/demo/ticket30-quality-gate.json)
+and records the manifest SHA-256 used for the decision. CAM v2 remains the
+default, while v4 is experimental and is not promoted by this result. The
+generated comparison does not claim segmentation, Neurocle equivalence, or
+production accuracy.
+
 ### Phase 2 UI snapshots
 
 <p>
@@ -47,6 +55,10 @@ produce approximate weak localization, not pixel-accurate boundaries.
 
 推薦用 repo 內的 generated 20MP wafer source，在 CUDA 上重跑同一個 immutable
 image-level Dataset Split 的 CAM v2／Patch Classification v3 matched comparison：
+
+`docs/demo/screenshots/realistic-20mp` 內的 `01`–`09` screenshots 是 Ticket 29
+demo evidence；Ticket 30 的 quality gate FAIL，因此這組官方 Demo 截圖不因 v4
+而更新。
 
 ```powershell
 $env:QT_QPA_PLATFORM = "offscreen"
@@ -73,6 +85,29 @@ split，threshold 只由 validation 產生，Grid Evaluation 數字只來自 tes
 因此 CAM v2 remains the default; Patch Classification v3 is optional. 這次
 generated-data comparison does not establish segmentation, Neurocle equivalence,
 or production accuracy.
+
+#### Ticket 30 quality gate — real generated held-out RTX 3090 evidence
+
+The Spatial MIL v4 gate report is
+[`docs/demo/ticket30-quality-gate.json`](docs/demo/ticket30-quality-gate.json).
+It requires every seed/class row to meet 150 defect instances, 1.0 coverage
+recall, at least 0.95 Grid precision and recall, at most 0.05 Normal Grid
+leakage, and at most 0.25 asserted-Grid occupancy P95. The published result is
+**Spatial MIL v4 gate FAIL**, so CAM v2 remains the default and v4 is
+experimental.
+
+The six held-out seed/class records below are copied from the report. `coverage`
+is `defect_coverage_recall`, `precision`/`recall` are Grid metrics, `leakage` is
+`normal_grid_leak_rate`, and `occupancy` is `asserted_grid_occupancy_p95`.
+
+| Seed | Class | Coverage | Precision | Recall | Leakage | Occupancy P95 | Instances |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 17 | scratch | 0.10666666666666667 | 0.3333333333333333 | 1.0 | 0.25 | 0.08049774169921875 | 150 |
+| 17 | particle | 0.47333333333333333 | 0.1111111111111111 | 1.0 | 1.0 | 0.5470352172851562 | 150 |
+| 42 | scratch | 0.24666666666666667 | 0.3333333333333333 | 1.0 | 0.25 | 0.16243743896484375 | 150 |
+| 42 | particle | 1.0 | 0.1111111111111111 | 1.0 | 1.0 | 0.9989433288574219 | 150 |
+| 91 | scratch | 0.44 | 0.3333333333333333 | 1.0 | 0.25 | 0.2965354919433594 | 150 |
+| 91 | particle | 1.0 | 0.1111111111111111 | 1.0 | 1.0 | 0.9944877624511719 | 150 |
 
 若只要快速驗證 UI 串接，可省略 `--source-image` 使用 synthetic source。
 

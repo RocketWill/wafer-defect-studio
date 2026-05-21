@@ -3,7 +3,14 @@
 這份教學走過既有 happy path，並重跑 Ticket 29 的 matched comparison：Grid
 Annotation → Patch Bag training → Grid Evaluation → dense patch Defect Confidence
 Map → Review／Export。CAM v2 remains the default; Patch Classification v3 is
-optional.
+optional。
+
+Ticket 30 的 real generated held-out RTX 3090 evidence 已完成發布，但 Spatial
+MIL v4 gate **FAIL**。因此 CAM v2 remains the default；v4 is experimental，
+不升級為預設或 production path。完整品質決策在
+[`ticket30-quality-gate.json`](ticket30-quality-gate.json)（repo path：
+`docs/demo/ticket30-quality-gate.json`）。這是 generated-data evidence，不是
+segmentation、Neurocle 等價或 production accuracy 聲明。
 
 ## 執行 Demo
 
@@ -59,6 +66,10 @@ Patch geometry: 128 px size, 64 px stride, max pooling. Checkpoint v1／v2 仍�
 
 ## 截圖與 machine-readable evidence
 
+下表的 `01`–`09` 全部是 Ticket 29 demo evidence；它們展示 v2/v3 的既有
+workflow，不代表 Spatial MIL v4 結果。Ticket 30 gate FAIL，所以本次不新增或
+更新官方 v4 截圖。
+
 | 階段 | 輸出 | 證據範圍 |
 | --- | --- | --- |
 | 1. 匯入 | [`01-import.png`](screenshots/realistic-20mp/01-import.png) | final run 的 1,536×1,536 processing proxy；summary 記錄 20-image corpus。 |
@@ -70,7 +81,29 @@ Patch geometry: 128 px size, 64 px stride, max pooling. Checkpoint v1／v2 仍�
 | 7. Patch v3 Grid Evaluation | [`07-patch-v3-grid-evaluation.png`](screenshots/realistic-20mp/07-patch-v3-grid-evaluation.png) | test-only v3 per-class metrics。 |
 | 8. Patch v3 map | [`08-patch-v3-confidence-map.png`](screenshots/realistic-20mp/08-patch-v3-confidence-map.png) | direct Detection worker 的單張 `evidence-patch_v3-test-1` artifact 經 value-only confidence viewer 顯示；不是 persisted Profile/Run 畫面。 |
 | 9. Patch v3 export | [`09-patch-v3-heatmap-export.png`](screenshots/realistic-20mp/09-patch-v3-heatmap-export.png) | v3 同一 source-coordinate map 的 native-size PNG export。 |
-| 10. Matched comparison | [`demo-summary.json`](screenshots/realistic-20mp/demo-summary.json) | 2026-05-04 最新重跑的完整 v2/v3 measured record。 |
+| Machine-readable matched comparison | [`demo-summary.json`](screenshots/realistic-20mp/demo-summary.json) | 2026-05-04 最新重跑的完整 v2/v3 measured record。 |
+
+### Ticket 30 quality gate — real generated held-out RTX 3090 evidence
+
+品質門檻報告為
+[`docs/demo/ticket30-quality-gate.json`](ticket30-quality-gate.json)。它要求每個
+seed/class 同時達到 150 個 defect instances、1.0 defect coverage recall、至少
+0.95 Grid precision/recall、最多 0.05 Normal Grid leakage，以及最多 0.25
+asserted-Grid occupancy P95。實際結果是 **Spatial MIL v4 gate FAIL**；因此
+CAM v2 remains the default，v4 is experimental。
+
+下列六組數字直接對應 JSON 的 `per_seed` rows；`coverage` =
+`defect_coverage_recall`，`precision`/`recall` = Grid metrics，`leakage` =
+`normal_grid_leak_rate`，`occupancy` = `asserted_grid_occupancy_p95`。
+
+| Seed | Class | Coverage | Precision | Recall | Leakage | Occupancy P95 | Instances |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 17 | scratch | 0.10666666666666667 | 0.3333333333333333 | 1.0 | 0.25 | 0.08049774169921875 | 150 |
+| 17 | particle | 0.47333333333333333 | 0.1111111111111111 | 1.0 | 1.0 | 0.5470352172851562 | 150 |
+| 42 | scratch | 0.24666666666666667 | 0.3333333333333333 | 1.0 | 0.25 | 0.16243743896484375 | 150 |
+| 42 | particle | 1.0 | 0.1111111111111111 | 1.0 | 1.0 | 0.9989433288574219 | 150 |
+| 91 | scratch | 0.44 | 0.3333333333333333 | 1.0 | 0.25 | 0.2965354919433594 | 150 |
+| 91 | particle | 1.0 | 0.1111111111111111 | 1.0 | 1.0 | 0.9944877624511719 | 150 |
 
 ## Matched GPU 結果
 
