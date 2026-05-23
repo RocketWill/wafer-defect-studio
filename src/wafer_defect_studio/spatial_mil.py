@@ -1,6 +1,7 @@
 """Losses for weakly supervised spatial logits."""
 
 from collections.abc import Sequence
+from math import ceil, isfinite, log
 
 import torch
 import torch.nn.functional as F
@@ -64,6 +65,66 @@ def absent_class_hard_negative_loss(logits: Tensor, targets: Tensor) -> Tensor:
     return F.softplus(absent_logits).mean()
 
 
+def positive_spatial_lse_loss(
+    logits: Tensor,
+    targets: Tensor,
+    class_weights: Tensor | None = None,
+    *,
+    temperature: float = 0.5,
+) -> Tensor:
+    """Reward distributed high spatial evidence for every present class."""
+
+    if not isfinite(temperature) or temperature <= 0:
+        raise ValueError("temperature must be a positive finite number")
+    flattened = _flatten_spatial_logits(logits)
+    pooled = temperature * (
+        torch.logsumexp(flattened / temperature, dim=-1) - log(flattened.shape[-1])
+    )
+    losses = F.softplus(-pooled)
+    if class_weights is not None:
+        losses = losses * class_weights.to(device=logits.device, dtype=logits.dtype)
+    present = losses[targets == 1]
+    if present.numel() == 0:
+        return logits.sum() * 0.0
+    return present.mean()
+
+
+def dense_absent_class_loss(
+    logits: Tensor,
+    targets: Tensor,
+    *,
+    hardest_fraction: float = 0.01,
+) -> Tensor:
+    """Suppress every absent-class location and equally weight its hardest tail."""
+
+    if not isfinite(hardest_fraction) or not 0 < hardest_fraction <= 1:
+        raise ValueError("hardest_fraction must be finite in the range (0, 1]")
+    losses = F.softplus(_flatten_spatial_logits(logits))
+    absent = losses[targets == 0]
+    if absent.numel() == 0:
+        return logits.sum() * 0.0
+    hardest_count = max(1, ceil(absent.shape[-1] * hardest_fraction))
+    hardest = torch.topk(absent, hardest_count, dim=-1).values
+    return 0.5 * (absent.mean() + hardest.mean())
+
+
+def present_sparse_budget_loss(
+    logits: Tensor,
+    targets: Tensor,
+    *,
+    probability_budget: float = 0.01,
+) -> Tensor:
+    """Penalize present-class mean probability only above its sparse budget."""
+
+    if not isfinite(probability_budget) or not 0 <= probability_budget <= 1:
+        raise ValueError("probability_budget must be finite in the range [0, 1]")
+    mean_probabilities = torch.sigmoid(_flatten_spatial_logits(logits)).mean(dim=-1)
+    present = mean_probabilities[targets == 1]
+    if present.numel() == 0:
+        return logits.sum() * 0.0
+    return F.relu(present - probability_budget).square().mean()
+
+
 def overlap_consistency_loss(
     logits: Tensor,
     patch_rects: Sequence[Rect],
@@ -117,9 +178,20 @@ def overlap_consistency_loss(
     return torch.cat(squared_differences).mean()
 
 
+def _flatten_spatial_logits(logits: Tensor) -> Tensor:
+    if logits.ndim == 4:
+        return logits.flatten(start_dim=2)
+    if logits.ndim == 5:
+        return logits.permute(0, 2, 1, 3, 4).flatten(start_dim=2)
+    raise ValueError("logits must be a 4D patch tensor or 5D bag tensor")
+
+
 __all__ = [
     "absent_class_hard_negative_loss",
+    "dense_absent_class_loss",
     "derive_train_positive_class_weights",
     "overlap_consistency_loss",
+    "positive_spatial_lse_loss",
     "positive_spatial_mil_loss",
+    "present_sparse_budget_loss",
 ]
