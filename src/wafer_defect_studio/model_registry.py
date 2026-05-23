@@ -118,6 +118,7 @@ class ResNet18SpatialLogits(nn.Module):
     """ResNet18 multi-scale features projected to stride-4 raw class logits."""
 
     architecture = "resnet18_spatial_logits"
+    feature_stride = 4
 
     def __init__(
         self,
@@ -143,6 +144,33 @@ class ResNet18SpatialLogits(nn.Module):
         inputs = duplicate_grayscale_channels(inputs)
         backbone = self.backbone
         features = backbone.maxpool(backbone.relu(backbone.bn1(backbone.conv1(inputs))))
+        layer1 = backbone.layer1(features)
+        layer2 = backbone.layer2(layer1)
+        layer3 = backbone.layer3(layer2)
+        layer4 = backbone.layer4(layer3)
+        output_size = layer1.shape[-2:]
+        multiscale = torch.cat(
+            [
+                layer1,
+                F.interpolate(layer2, size=output_size, mode="bilinear", align_corners=False),
+                F.interpolate(layer3, size=output_size, mode="bilinear", align_corners=False),
+                F.interpolate(layer4, size=output_size, mode="bilinear", align_corners=False),
+            ],
+            dim=1,
+        )
+        return self.spatial_head(multiscale)
+
+
+class ResNet18SpatialLogitsV5(ResNet18SpatialLogits):
+    """The v5 spatial model retaining stride-2 features for small defects."""
+
+    architecture = "resnet18_spatial_logits_v5"
+    feature_stride = 2
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        inputs = duplicate_grayscale_channels(inputs)
+        backbone = self.backbone
+        features = backbone.relu(backbone.bn1(backbone.conv1(inputs)))
         layer1 = backbone.layer1(features)
         layer2 = backbone.layer2(layer1)
         layer3 = backbone.layer3(layer2)
@@ -224,6 +252,21 @@ def create_resnet18_spatial_logits(
     return model.to(resolve_device(device))
 
 
+def create_resnet18_spatial_logits_v5(
+    class_count: int,
+    *,
+    weights: WeightsPolicy | str | None = WeightsPolicy.NONE,
+    device: str | torch.device | None = None,
+) -> ResNet18SpatialLogitsV5:
+    """Create the separately versioned stride-2 v5 spatial model."""
+
+    model = ResNet18SpatialLogitsV5(
+        class_count,
+        weights=_coerce_weights_policy(weights),
+    )
+    return model.to(resolve_device(device))
+
+
 def create_model(
     architecture: str,
     class_count: int,
@@ -266,9 +309,18 @@ def load_project_checkpoint(
         input_size["width"], input_size["height"]
     ) != tuple(expected_input_size):
         raise ModelRegistryError("project checkpoint input rectangle does not match the request")
-    is_spatial = checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v4"
+    checkpoint_format = checkpoint["checkpoint_format"]
+    is_v5 = checkpoint_format == "wafer_defect_studio.resnet18.v5"
+    is_spatial = checkpoint_format in {
+        "wafer_defect_studio.resnet18.v4",
+        "wafer_defect_studio.resnet18.v5",
+    }
     model = (
-        create_resnet18_spatial_logits(
+        create_resnet18_spatial_logits_v5(
+            checkpoint["class_count"], weights=WeightsPolicy.NONE, device=device
+        )
+        if is_v5
+        else create_resnet18_spatial_logits(
             checkpoint["class_count"], weights=WeightsPolicy.NONE, device=device
         )
         if is_spatial
@@ -377,11 +429,13 @@ __all__ = [
     "ModelRegistryError",
     "ResNet18Classifier",
     "ResNet18SpatialLogits",
+    "ResNet18SpatialLogitsV5",
     "SUPPORTED_ARCHITECTURES",
     "WeightsPolicy",
     "create_model",
     "create_resnet18",
     "create_resnet18_spatial_logits",
+    "create_resnet18_spatial_logits_v5",
     "duplicate_grayscale_channels",
     "load_project_checkpoint",
     "max_pool_patch_logits",

@@ -53,6 +53,7 @@ _CHECKPOINT_FORMAT_V1 = "wafer_defect_studio.resnet18.v1"
 _CHECKPOINT_FORMAT_V2 = "wafer_defect_studio.resnet18.v2"
 _CHECKPOINT_FORMAT_V3 = "wafer_defect_studio.resnet18.v3"
 _CHECKPOINT_FORMAT_V4 = "wafer_defect_studio.resnet18.v4"
+_CHECKPOINT_FORMAT_V5 = "wafer_defect_studio.resnet18.v5"
 _IMMUTABLE_COLUMNS = (
     "run_id",
     "created_at",
@@ -576,6 +577,7 @@ def validate_project_checkpoint(
         _CHECKPOINT_FORMAT_V2,
         _CHECKPOINT_FORMAT_V3,
         _CHECKPOINT_FORMAT_V4,
+        _CHECKPOINT_FORMAT_V5,
     }:
         raise TrainingRunError("unsupported project checkpoint format")
     if value["checkpoint_format"] in {_CHECKPOINT_FORMAT_V2, _CHECKPOINT_FORMAT_V3}:
@@ -664,8 +666,27 @@ def validate_project_checkpoint(
                 raise TrainingRunError(
                     "resnet18.v4 checkpoint hard_negative_refinement is invalid"
                 )
+    if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V5:
+        if value.get("feature_stride") != 2:
+            raise TrainingRunError("resnet18.v5 checkpoint feature_stride must be 2")
+        for name in ("patch_size", "patch_stride"):
+            item = value.get(name)
+            if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+                raise TrainingRunError(
+                    f"resnet18.v5 checkpoint {name} must be a positive integer"
+                )
+        if value["patch_stride"] > value["patch_size"]:
+            raise TrainingRunError(
+                "resnet18.v5 checkpoint patch_stride cannot exceed patch_size"
+            )
+        if value.get("training_policy") != "spatial_mil_v5":
+            raise TrainingRunError(
+                "resnet18.v5 checkpoint training_policy must be spatial_mil_v5"
+            )
     expected_architecture = (
-        "resnet18_spatial_logits"
+        "resnet18_spatial_logits_v5"
+        if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V5
+        else "resnet18_spatial_logits"
         if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V4
         else "resnet18"
     )
