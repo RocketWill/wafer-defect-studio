@@ -98,9 +98,9 @@ class RunConfig:
             raise TrainingRunError("only the resnet18 architecture is supported")
         if self.weights_policy not in {"none", "imagenet"}:
             raise TrainingRunError("weights_policy must be 'none' or 'imagenet'")
-        if self.training_policy not in {"legacy", "spatial_mil_v4"}:
+        if self.training_policy not in {"legacy", "spatial_mil_v4", "spatial_mil_v5"}:
             raise TrainingRunError(
-                "training_policy must be 'legacy' or 'spatial_mil_v4'"
+                "training_policy must be 'legacy', 'spatial_mil_v4', or 'spatial_mil_v5'"
             )
         for name in ("class_count", "batch_size", "epochs"):
             _require_positive_int(getattr(self, name), name)
@@ -126,10 +126,18 @@ class RunConfig:
                 raise TrainingRunError("patch_stride cannot exceed patch_size")
             if self.training_policy == "legacy" and self.bag_pooling != "max":
                 raise TrainingRunError("bag_pooling must be max for Patch Classification")
-        if self.training_policy == "spatial_mil_v4" and self.patch_size is None:
-            raise TrainingRunError("spatial_mil_v4 requires patch geometry")
-        if self.training_policy == "spatial_mil_v4" and self.bag_pooling is not None:
-            raise TrainingRunError("spatial_mil_v4 bag_pooling must be null")
+        if self.training_policy in {"spatial_mil_v4", "spatial_mil_v5"} and self.patch_size is None:
+            raise TrainingRunError(f"{self.training_policy} requires patch geometry")
+        if self.training_policy in {"spatial_mil_v4", "spatial_mil_v5"} and self.bag_pooling is not None:
+            raise TrainingRunError(f"{self.training_policy} bag_pooling must be null")
+        if self.training_policy == "spatial_mil_v5" and self.batch_size not in {2, 4}:
+            raise TrainingRunError("spatial_mil_v5 physical batch_size must be 2 or 4")
+        if self.training_policy == "spatial_mil_v5" and (
+            self.epochs != 30 or float(self.learning_rate) != 0.0003
+        ):
+            raise TrainingRunError(
+                "spatial_mil_v5 requires epochs=30 and learning_rate=0.0003"
+            )
         if self.training_policy == "legacy" and self.patch_size is None and self.bag_pooling is not None:
             raise TrainingRunError(
                 "patch_size and patch_stride must be provided with bag_pooling"
@@ -683,6 +691,42 @@ def validate_project_checkpoint(
             raise TrainingRunError(
                 "resnet18.v5 checkpoint training_policy must be spatial_mil_v5"
             )
+        expected_loss_policy = {
+            "positive_pooling": "normalized_logsumexp",
+            "negative_dense_hardest_fraction": 0.01,
+            "sparse_probability_budget": 0.01,
+            "sparse_loss_weight": 0.25,
+            "overlap_loss_weight": 0.10,
+        }
+        if value.get("loss_policy") != expected_loss_policy:
+            raise TrainingRunError("resnet18.v5 checkpoint loss_policy is invalid")
+        optimizer = value.get("optimizer_policy")
+        if not isinstance(optimizer, Mapping) or optimizer != {
+            "name": "adamw",
+            "learning_rate": 0.0003,
+            "weight_decay": 0.0001,
+            "gradient_clip_norm": 5.0,
+        }:
+            raise TrainingRunError("resnet18.v5 checkpoint optimizer_policy is invalid")
+        batch = value.get("batch_policy")
+        if not isinstance(batch, Mapping) or batch not in (
+            {"physical_batch_size": 4, "gradient_accumulation_steps": 1, "effective_batch_size": 4},
+            {"physical_batch_size": 2, "gradient_accumulation_steps": 2, "effective_batch_size": 4},
+        ):
+            raise TrainingRunError("resnet18.v5 checkpoint batch_policy is invalid")
+        selection = value.get("checkpoint_selection")
+        if (
+            not isinstance(selection, Mapping)
+            or selection.get("source") != "validation"
+            or selection.get("metric") != "v5_validation_loss"
+            or not isinstance(selection.get("selected_epoch"), int)
+            or isinstance(selection.get("selected_epoch"), bool)
+            or selection["selected_epoch"] < 1
+            or not isinstance(selection.get("value"), (int, float))
+        ):
+            raise TrainingRunError("resnet18.v5 checkpoint checkpoint_selection is invalid")
+        if value.get("epochs") != 30:
+            raise TrainingRunError("resnet18.v5 checkpoint epochs must be 30")
     expected_architecture = (
         "resnet18_spatial_logits_v5"
         if value["checkpoint_format"] == _CHECKPOINT_FORMAT_V5

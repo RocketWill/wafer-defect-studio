@@ -51,6 +51,22 @@ class SpatialLogitModelV5Test(unittest.TestCase):
             "patch_size": 128,
             "patch_stride": 64,
             "training_policy": "spatial_mil_v5",
+            "loss_policy": {
+                "positive_pooling": "normalized_logsumexp",
+                "negative_dense_hardest_fraction": 0.01,
+                "sparse_probability_budget": 0.01,
+                "sparse_loss_weight": 0.25,
+                "overlap_loss_weight": 0.10,
+            },
+            "optimizer_policy": {"name": "adamw", "learning_rate": 0.0003,
+                                 "weight_decay": 0.0001, "gradient_clip_norm": 5.0},
+            "batch_policy": {"physical_batch_size": 4,
+                             "gradient_accumulation_steps": 1,
+                             "effective_batch_size": 4},
+            "checkpoint_selection": {"source": "validation",
+                                     "metric": "v5_validation_loss",
+                                     "selected_epoch": 7, "value": 0.25},
+            "epochs": 30,
             "state_dict": source.state_dict(),
         }
         with TemporaryDirectory() as temporary:

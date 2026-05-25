@@ -77,9 +77,9 @@ class TrainingConfig(_VersionedMessage):
             raise TrainingProtocolError("only the resnet18 architecture is supported")
         if self.weights_policy not in {"none", "imagenet"}:
             raise TrainingProtocolError("weights_policy must be 'none' or 'imagenet'")
-        if self.training_policy not in {"legacy", "spatial_mil_v4"}:
+        if self.training_policy not in {"legacy", "spatial_mil_v4", "spatial_mil_v5"}:
             raise TrainingProtocolError(
-                "training_policy must be 'legacy' or 'spatial_mil_v4'"
+                "training_policy must be 'legacy', 'spatial_mil_v4', or 'spatial_mil_v5'"
             )
         for name in ("class_count", "epochs", "batch_size"):
             _require_positive_int(getattr(self, name), name)
@@ -101,8 +101,16 @@ class TrainingConfig(_VersionedMessage):
             _require_positive_int(self.patch_stride, "patch_stride")
             if self.patch_stride > self.patch_size:
                 raise TrainingProtocolError("patch_stride cannot exceed patch_size")
-        if self.training_policy == "spatial_mil_v4" and self.patch_size is None:
-            raise TrainingProtocolError("spatial_mil_v4 requires patch geometry")
+        if self.training_policy in {"spatial_mil_v4", "spatial_mil_v5"} and self.patch_size is None:
+            raise TrainingProtocolError(f"{self.training_policy} requires patch geometry")
+        if self.training_policy == "spatial_mil_v5" and self.batch_size not in {2, 4}:
+            raise TrainingProtocolError("spatial_mil_v5 physical batch_size must be 2 or 4")
+        if self.training_policy == "spatial_mil_v5" and (
+            self.epochs != 30 or float(self.learning_rate) != 0.0003
+        ):
+            raise TrainingProtocolError(
+                "spatial_mil_v5 requires epochs=30 and learning_rate=0.0003"
+            )
         if not isinstance(self.priority_normal_bag_ids, (list, tuple)):
             raise TrainingProtocolError("priority_normal_bag_ids must be an ordered sequence")
         priority_ids = tuple(self.priority_normal_bag_ids)

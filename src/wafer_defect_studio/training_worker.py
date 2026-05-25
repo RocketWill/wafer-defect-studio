@@ -27,14 +27,18 @@ from .detection_windows import Rect
 from .model_registry import (
     create_resnet18,
     create_resnet18_spatial_logits,
+    create_resnet18_spatial_logits_v5,
     max_pool_patch_logits,
     resolve_device,
 )
 from .spatial_mil import (
     absent_class_hard_negative_loss,
+    dense_absent_class_loss,
     derive_train_positive_class_weights,
     overlap_consistency_loss,
+    positive_spatial_lse_loss,
     positive_spatial_mil_loss,
+    present_sparse_budget_loss,
 )
 from .training_input_bundle import TrainingInputBundle
 from .training_augmentation import SPATIAL_MIL_V4_AUGMENTATION_POLICY
@@ -72,7 +76,7 @@ def create_training_data_loader(
 
     shape_keys = dataset.bag_shape_keys
     if shape_keys is not None:
-        if config.training_policy == "spatial_mil_v4":
+        if config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"} and split == "train":
             target_keys = dataset.bag_target_keys
             if target_keys is None:
                 raise RuntimeError("spatial_mil_v4 loader requires v2 Patch Bag targets")
@@ -208,6 +212,7 @@ def run_worker(
         log_lines.append(f"batch_size={config.batch_size}")
         bundle = None
         loader = None
+        validation_loader = None
         refinement_loader = None
         if request_value.input_bundle_path is not None:
             bundle_path = Path(request_value.input_bundle_path).expanduser().resolve()
@@ -219,9 +224,9 @@ def run_worker(
                 raise RuntimeError("training input bundle does not match the requested snapshot/split")
             if len(bundle.class_codes) != config.class_count:
                 raise RuntimeError("training input bundle class count does not match the request")
-            if config.training_policy == "spatial_mil_v4" and bundle.version != 2:
+            if config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"} and bundle.version != 2:
                 raise RuntimeError(
-                    f"spatial_mil_v4 requires bundle version 2; received version {bundle.version}"
+                    f"{config.training_policy} requires bundle version 2; received version {bundle.version}"
                 )
             if (
                 config.training_policy == "spatial_mil_v4"
@@ -229,6 +234,10 @@ def run_worker(
             ):
                 raise RuntimeError(
                     f"spatial_mil_v4 patch_size must be divisible by feature stride 4; received {config.patch_size}"
+                )
+            if config.training_policy == "spatial_mil_v5" and config.patch_size % 2 != 0:
+                raise RuntimeError(
+                    f"spatial_mil_v5 patch_size must be divisible by feature stride 2; received {config.patch_size}"
                 )
             if bundle.version == 1:
                 sample_sizes = {(sample.width, sample.height) for sample in bundle.samples}
@@ -251,9 +260,9 @@ def run_worker(
             dataset = TrainingPatchDataset(
                 bundle,
                 "train",
-                include_patch_rects=config.training_policy == "spatial_mil_v4",
+                include_patch_rects=config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"},
                 spatial_mil_v4_seed=(
-                    config.seed if config.training_policy == "spatial_mil_v4" else None
+                    config.seed if config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"} else None
                 ),
             )
             loader = create_training_data_loader(
@@ -261,6 +270,13 @@ def run_worker(
                 config,
                 split="train",
             )
+            if config.training_policy == "spatial_mil_v5":
+                validation_dataset = TrainingPatchDataset(
+                    bundle, "validation", include_patch_rects=True
+                )
+                validation_loader = create_training_data_loader(
+                    validation_dataset, config, split="validation"
+                )
             if config.priority_normal_bag_ids:
                 bag_ids = dataset.bag_ids
                 if bag_ids is None:
@@ -283,11 +299,16 @@ def run_worker(
                         index_by_id[bag_id] for bag_id in config.priority_normal_bag_ids
                     ),
                 )
-        if config.training_policy == "spatial_mil_v4" and bundle is None:
+        if config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"} and bundle is None:
             raise RuntimeError(
-                "spatial_mil_v4 requires a v2 Training Input Bundle"
+                f"{config.training_policy} requires a v2 Training Input Bundle"
             )
         model = (
+            create_resnet18_spatial_logits_v5(
+                config.class_count, weights=config.weights_policy, device=device
+            )
+            if config.training_policy == "spatial_mil_v5"
+            else
             create_resnet18_spatial_logits(
                 config.class_count,
                 weights=config.weights_policy,
@@ -305,9 +326,10 @@ def run_worker(
             optimizer_parameters = model.backbone.fc.parameters()
         else:
             optimizer_parameters = model.parameters()
-        optimizer = torch.optim.SGD(
-            optimizer_parameters,
-            lr=float(config.learning_rate),
+        optimizer = (
+            torch.optim.AdamW(optimizer_parameters, lr=float(config.learning_rate), weight_decay=0.0001)
+            if config.training_policy == "spatial_mil_v5"
+            else torch.optim.SGD(optimizer_parameters, lr=float(config.learning_rate))
         )
         if bundle is None:
             # BatchNorm cannot update with a one-item batch.  Keeping the model in
@@ -324,18 +346,23 @@ def run_worker(
         step_number = 0
         positive_class_weights = (
             derive_train_positive_class_weights(bundle).to(device)
-            if bundle is not None and config.training_policy == "spatial_mil_v4"
+            if bundle is not None and config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"}
             else None
         )
 
         total_epochs = config.epochs + (5 if refinement_loader is not None else 0)
+        accumulation_steps = 2 if config.training_policy == "spatial_mil_v5" and config.batch_size == 2 else 1
+        best_validation_loss = float("inf")
+        best_epoch = None
+        best_state_dict = None
+        optimizer.zero_grad(set_to_none=True)
         for epoch in range(1, total_epochs + 1):
             active_loader = (
                 refinement_loader
                 if refinement_loader is not None and epoch > config.epochs
                 else loader
             )
-            if active_loader is not None and config.training_policy == "spatial_mil_v4":
+            if active_loader is not None and config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"}:
                 active_loader.batch_sampler.set_epoch(epoch - 1)
                 active_loader.dataset.set_epoch(epoch - 1)
             batches = (
@@ -344,7 +371,7 @@ def run_worker(
                 else ((synthetic_inputs, synthetic_targets) for _ in range(synthetic_steps))
             )
             for batch in batches:
-                if config.training_policy == "spatial_mil_v4":
+                if config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"}:
                     inputs, targets, patch_rect_values = batch
                 else:
                     inputs, targets = batch
@@ -357,7 +384,6 @@ def run_worker(
                         f"injected out-of-memory failure at step {step_number}"
                     )
 
-                optimizer.zero_grad(set_to_none=True)
                 if loader is not None:
                     effective_batch_size = (
                         inputs.shape[0] * inputs.shape[1]
@@ -367,7 +393,7 @@ def run_worker(
                     model.train() if effective_batch_size > 1 else model.eval()
                     inputs = inputs.to(device)
                     targets = targets.to(device)
-                if config.training_policy == "spatial_mil_v4":
+                if config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"}:
                     batch_size, patch_count, channels, height, width = inputs.shape
                     raw_logits = model(
                         inputs.reshape(batch_size * patch_count, channels, height, width)
@@ -380,21 +406,36 @@ def run_worker(
                         feature_height,
                         feature_width,
                     )
-                    positive_loss = positive_spatial_mil_loss(
-                        logits, targets, positive_class_weights
+                    positive_loss = (
+                        positive_spatial_lse_loss(logits, targets, positive_class_weights)
+                        if config.training_policy == "spatial_mil_v5"
+                        else positive_spatial_mil_loss(logits, targets, positive_class_weights)
                     )
-                    absent_loss = absent_class_hard_negative_loss(logits, targets)
+                    absent_loss = (
+                        dense_absent_class_loss(logits, targets)
+                        if config.training_policy == "spatial_mil_v5"
+                        else absent_class_hard_negative_loss(logits, targets)
+                    )
                     overlap_loss = torch.stack(
                         [
                             overlap_consistency_loss(
                                 bag_logits,
                                 [Rect(*map(int, values)) for values in bag_rects.tolist()],
-                                feature_stride=4,
+                                feature_stride=2 if config.training_policy == "spatial_mil_v5" else 4,
                             )
                             for bag_logits, bag_rects in zip(logits, patch_rect_values, strict=True)
                         ]
                     ).mean()
-                    loss = positive_loss + absent_loss + overlap_loss
+                    sparse_loss = (
+                        present_sparse_budget_loss(logits, targets)
+                        if config.training_policy == "spatial_mil_v5"
+                        else logits.sum() * 0.0
+                    )
+                    loss = positive_loss + absent_loss + (
+                        0.25 * sparse_loss + 0.10 * overlap_loss
+                        if config.training_policy == "spatial_mil_v5"
+                        else overlap_loss
+                    )
                 elif inputs.ndim == 5:
                     batch_size, patch_count, channels, height, width = inputs.shape
                     patch_logits = model(
@@ -405,8 +446,12 @@ def run_worker(
                 else:
                     logits = model(inputs)
                     loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
-                loss.backward()
-                optimizer.step()
+                (loss / accumulation_steps).backward()
+                if step_number % accumulation_steps == 0 or step_number == total_steps:
+                    if config.training_policy == "spatial_mil_v5":
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
                 loss_value = float(loss.detach().cpu().item())
                 elapsed = max(time.monotonic() - started, 0.0)
                 eta = (elapsed / step_number) * (total_steps - step_number)
@@ -430,6 +475,22 @@ def run_worker(
                 if step_delay:
                     time.sleep(step_delay)
 
+            if validation_loader is not None:
+                validation_loss = _evaluate_v5_validation_loss(
+                    model, validation_loader, config, device, positive_class_weights
+                )
+                log_lines.append(f"epoch={epoch} validation_loss={validation_loss:.6f}")
+                if validation_loss < best_validation_loss:
+                    best_validation_loss = validation_loss
+                    best_epoch = epoch
+                    best_state_dict = {
+                        name: value.detach().cpu().clone()
+                        for name, value in model.state_dict().items()
+                    }
+
+        if best_state_dict is not None:
+            model.load_state_dict(best_state_dict, strict=True)
+
         if _is_cancelled(cancel_event):
             _emit_cancelled(output_queue, request_value, config, log_lines)
             return
@@ -443,6 +504,10 @@ def run_worker(
             bundle=bundle,
             base_epochs=config.epochs,
             refinement_epochs=5 if refinement_loader is not None else 0,
+            selected_epoch=best_epoch,
+            selected_validation_loss=(
+                best_validation_loss if best_epoch is not None else None
+            ),
         )
         terminal_message = (
             f"Training completed; steps={total_steps}; final_loss={loss_value:.6f}; "
@@ -551,6 +616,50 @@ def _freeze_backbone(model: torch.nn.Module) -> None:
         parameter.requires_grad_(True)
 
 
+def _evaluate_v5_validation_loss(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    config: TrainingConfig,
+    device: torch.device,
+    positive_class_weights: Tensor | None,
+) -> float:
+    """Return deterministic validation loss without updating model state."""
+
+    was_training = model.training
+    model.eval()
+    values: list[float] = []
+    with torch.no_grad():
+        for inputs, targets, patch_rect_values in loader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+            batch_size, patch_count, channels, height, width = inputs.shape
+            raw_logits = model(inputs.reshape(batch_size * patch_count, channels, height, width))
+            logits = raw_logits.reshape(
+                batch_size, patch_count, config.class_count, *raw_logits.shape[-2:]
+            )
+            overlap = torch.stack(
+                [
+                    overlap_consistency_loss(
+                        bag_logits,
+                        [Rect(*map(int, rect)) for rect in bag_rects.tolist()],
+                        feature_stride=2,
+                    )
+                    for bag_logits, bag_rects in zip(logits, patch_rect_values, strict=True)
+                ]
+            ).mean()
+            loss = (
+                positive_spatial_lse_loss(logits, targets, positive_class_weights)
+                + dense_absent_class_loss(logits, targets)
+                + 0.25 * present_sparse_budget_loss(logits, targets)
+                + 0.10 * overlap
+            )
+            values.append(float(loss.cpu().item()))
+    model.train(was_training)
+    if not values:
+        raise RuntimeError("spatial_mil_v5 requires validation members")
+    return sum(values) / len(values)
+
+
 def _write_staged_artifacts(
     staging: Path,
     model: torch.nn.Module,
@@ -562,18 +671,23 @@ def _write_staged_artifacts(
     bundle: TrainingInputBundle | None = None,
     base_epochs: int,
     refinement_epochs: int,
+    selected_epoch: int | None = None,
+    selected_validation_loss: float | None = None,
 ) -> None:
     spatial_v4 = bundle is not None and config.training_policy == "spatial_mil_v4"
+    spatial_v5 = bundle is not None and config.training_policy == "spatial_mil_v5"
     checkpoint = {
         "checkpoint_format": (
-            "wafer_defect_studio.resnet18.v4"
+            "wafer_defect_studio.resnet18.v5"
+            if spatial_v5
+            else "wafer_defect_studio.resnet18.v4"
             if spatial_v4
             else _CHECKPOINT_FORMAT_V3
             if bundle is not None and bundle.version == 2
             else _CHECKPOINT_FORMAT_V2
         ),
-        "architecture": "resnet18_spatial_logits" if spatial_v4 else "resnet18",
-        "feature_stride": 4 if spatial_v4 else 16,
+        "architecture": "resnet18_spatial_logits_v5" if spatial_v5 else "resnet18_spatial_logits" if spatial_v4 else "resnet18",
+        "feature_stride": 2 if spatial_v5 else 4 if spatial_v4 else 16,
         "class_count": config.class_count,
         "class_codes": list(bundle.class_codes) if bundle is not None else [
             f"class-{index}" for index in range(config.class_count)
@@ -606,7 +720,40 @@ def _write_staged_artifacts(
             for name, value in model.state_dict().items()
         },
     }
-    if spatial_v4:
+    if spatial_v5:
+        checkpoint.update(
+            {
+                "patch_size": config.patch_size,
+                "patch_stride": config.patch_stride,
+                "training_policy": "spatial_mil_v5",
+                "loss_policy": {
+                    "positive_pooling": "normalized_logsumexp",
+                    "negative_dense_hardest_fraction": 0.01,
+                    "sparse_probability_budget": 0.01,
+                    "sparse_loss_weight": 0.25,
+                    "overlap_loss_weight": 0.10,
+                },
+                "optimizer_policy": {
+                    "name": "adamw",
+                    "learning_rate": float(config.learning_rate),
+                    "weight_decay": 0.0001,
+                    "gradient_clip_norm": 5.0,
+                },
+                "batch_policy": {
+                    "physical_batch_size": config.batch_size,
+                    "gradient_accumulation_steps": 2 if config.batch_size == 2 else 1,
+                    "effective_batch_size": 4,
+                },
+                "checkpoint_selection": {
+                    "source": "validation",
+                    "metric": "v5_validation_loss",
+                    "selected_epoch": selected_epoch,
+                    "value": selected_validation_loss,
+                },
+                "epochs": base_epochs,
+            }
+        )
+    elif spatial_v4:
         checkpoint.update(
             {
                 "patch_size": config.patch_size,
@@ -648,7 +795,7 @@ def _write_staged_artifacts(
     manifest_path = staging / "manifest.json"
     torch.save(checkpoint, model_path)
     metrics = {
-        "architecture": "resnet18_spatial_logits" if spatial_v4 else "resnet18",
+        "architecture": "resnet18_spatial_logits_v5" if spatial_v5 else "resnet18_spatial_logits" if spatial_v4 else "resnet18",
         "epochs": base_epochs + refinement_epochs,
         "steps": total_steps,
         "final_loss": final_loss,
