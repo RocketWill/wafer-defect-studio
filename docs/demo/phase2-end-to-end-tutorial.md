@@ -12,6 +12,14 @@ MIL v4 gate **FAIL**。因此 CAM v2 remains the default；v4 is experimental，
 `docs/demo/ticket30-quality-gate.json`）。這是 generated-data evidence，不是
 segmentation、Neurocle 等價或 production accuracy 聲明。
 
+Ticket 31 另以五個 development seeds 在 RTX 3090 實跑 Spatial MIL v5；strict
+development gate 仍為 **FAIL**，10 個 seed/class rows 中 7 個失敗，主要問題是
+whole-wafer leakage。決策報告在
+[`ticket31-development-gate.json`](ticket31-development-gate.json)。依 frozen
+stop condition，不執行 final held-out gate；CAM v2 維持預設，v5 維持
+experimental。這也不是 Neurocle 等價、segmentation 或 production accuracy
+聲明。
+
 ## 執行 Demo
 
 在 repository root 執行 realistic-source GPU Demo：

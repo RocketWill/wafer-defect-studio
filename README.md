@@ -43,6 +43,15 @@ default, while v4 is experimental and is not promoted by this result. The
 generated comparison does not claim segmentation, Neurocle equivalence, or
 production accuracy.
 
+Ticket 31 tested Spatial MIL v5 on a separate position-diverse development
+corpus with five real RTX 3090 runs. Its strict development gate is also
+**FAIL**: 7 of 10 seed/class rows failed, primarily through whole-wafer leakage.
+The tracked decision is
+[`docs/demo/ticket31-development-gate.json`](docs/demo/ticket31-development-gate.json).
+This blocks final held-out execution; CAM v2 remains the default and v5 remains
+experimental. It does not establish Neurocle equivalence, segmentation, or
+production accuracy.
+
 ### Phase 2 UI snapshots
 
 <p>

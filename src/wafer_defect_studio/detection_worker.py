@@ -414,7 +414,10 @@ def run_detection_worker(
                 checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v3"
             )
             is_spatial_checkpoint = (
-                checkpoint["checkpoint_format"] == "wafer_defect_studio.resnet18.v4"
+                checkpoint["checkpoint_format"] in {
+                    "wafer_defect_studio.resnet18.v4",
+                    "wafer_defect_studio.resnet18.v5",
+                }
             )
             if is_patch_checkpoint or is_spatial_checkpoint:
                 expected_window = (checkpoint["patch_size"], checkpoint["patch_size"])
@@ -540,7 +543,7 @@ def run_detection_worker(
             provenance["checkpoint_path"] = str(Path(request_value.checkpoint_path).expanduser().resolve())
             provenance["checkpoint_format"] = checkpoint["checkpoint_format"]
             if is_spatial_checkpoint:
-                provenance["feature_stride"] = 4
+                provenance["feature_stride"] = checkpoint["feature_stride"]
             artifact = generate_all_convolutional_artifact(
                 windows,
                 map_values,

@@ -55,8 +55,12 @@ def score_training_bundle(
     is_patch_bag_checkpoint = checkpoint_format in {
         "wafer_defect_studio.resnet18.v3",
         "wafer_defect_studio.resnet18.v4",
+        "wafer_defect_studio.resnet18.v5",
     }
-    is_spatial_checkpoint = checkpoint_format == "wafer_defect_studio.resnet18.v4"
+    is_spatial_checkpoint = checkpoint_format in {
+        "wafer_defect_studio.resnet18.v4",
+        "wafer_defect_studio.resnet18.v5",
+    }
     input_size = checkpoint["input_size"]
     if is_patch_bag_checkpoint:
         if bundle.version != 2:
