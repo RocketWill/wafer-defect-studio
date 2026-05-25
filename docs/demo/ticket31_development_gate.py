@@ -7,6 +7,8 @@ import hashlib
 import json
 import queue
 import threading
+from math import isfinite
+from numbers import Real
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -38,6 +40,62 @@ from wafer_defect_studio.training_worker import run_worker
 
 CLASS_CODES = ("scratch", "particle")
 SCHEMA = "ticket31-development-gate.v1"
+
+
+def select_validation_spatial_epoch(
+    candidates: Sequence[Mapping[str, object]],
+    class_codes: Sequence[str],
+) -> dict[str, object]:
+    """Select the strongest validation spatial evidence, then earliest epoch."""
+
+    codes = tuple(class_codes)
+    if not candidates or not codes:
+        raise ValueError("validation spatial candidates and class_codes must not be empty")
+    ranked = []
+    seen_epochs = set()
+    for candidate in candidates:
+        epoch = candidate.get("epoch")
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1 or epoch in seen_epochs:
+            raise ValueError("validation spatial candidate epochs must be unique positive integers")
+        seen_epochs.add(epoch)
+        if candidate.get("source_split") != "validation":
+            raise ValueError("checkpoint selection requires validation spatial metrics")
+        per_class = candidate.get("per_class")
+        if not isinstance(per_class, Mapping) or tuple(per_class) != codes:
+            raise ValueError("validation spatial candidate class order drift")
+        rows = tuple(per_class[code] for code in codes)
+        values = tuple(_selection_values(row) for row in rows)
+        feasible = all(_row_result(row) == "PASS" for row in rows)
+        key = (
+            feasible,
+            min(value[0] for value in values),
+            min(min(value[1], value[2]) for value in values),
+            min(value[1] for value in values),
+            min(value[2] for value in values),
+            -max(value[3] for value in values),
+            -max(value[4] for value in values),
+            -epoch,
+        )
+        ranked.append((key, candidate))
+    selected = dict(max(ranked, key=lambda item: item[0])[1])
+    selected["selection_source"] = "validation_spatial_metrics"
+    return selected
+
+
+def _selection_values(row: object) -> tuple[float, float, float, float, float]:
+    if not isinstance(row, Mapping):
+        raise ValueError("validation spatial class metrics must be mappings")
+    names = (
+        "defect_coverage_recall", "grid_precision", "grid_recall",
+        "normal_grid_leak_rate", "asserted_grid_occupancy_p95",
+    )
+    values = tuple(row.get(name) for name in names)
+    if any(
+        isinstance(value, bool) or not isinstance(value, Real) or not isfinite(float(value))
+        for value in values
+    ):
+        raise ValueError("validation spatial class metrics must be finite numbers")
+    return tuple(float(value) for value in values)
 
 
 def run_development_gate(output_root: Path) -> dict[str, object]:
@@ -254,4 +312,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["CLASS_CODES", "SCHEMA", "run_development_gate"]
+__all__ = [
+    "CLASS_CODES", "SCHEMA", "run_development_gate",
+    "select_validation_spatial_epoch",
+]
