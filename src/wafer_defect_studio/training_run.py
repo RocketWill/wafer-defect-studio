@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
+from math import isfinite
 from typing import Any
 
 import torch
@@ -715,14 +716,41 @@ def validate_project_checkpoint(
         ):
             raise TrainingRunError("resnet18.v5 checkpoint batch_policy is invalid")
         selection = value.get("checkpoint_selection")
+        selection_epoch = selection.get("selected_epoch") if isinstance(selection, Mapping) else None
+        loss_selection = (
+            isinstance(selection, Mapping)
+            and selection.get("metric") == "v5_validation_loss"
+            and isinstance(selection.get("value"), (int, float))
+            and not isinstance(selection.get("value"), bool)
+            and isfinite(float(selection["value"]))
+        )
+        spatial_rows = selection.get("per_class") if isinstance(selection, Mapping) else None
+        spatial_selection = (
+            isinstance(selection, Mapping)
+            and selection.get("metric") == "validation_spatial_metrics"
+            and isinstance(spatial_rows, Mapping)
+            and set(spatial_rows) == set(value["class_codes"])
+            and all(
+                isinstance(row, Mapping)
+                and all(
+                    isinstance(row.get(name), (int, float))
+                    and not isinstance(row.get(name), bool)
+                    and isfinite(float(row[name]))
+                    for name in (
+                        "defect_coverage_recall", "grid_precision", "grid_recall",
+                        "normal_grid_leak_rate", "asserted_grid_occupancy_p95",
+                    )
+                )
+                for row in spatial_rows.values()
+            )
+        )
         if (
             not isinstance(selection, Mapping)
             or selection.get("source") != "validation"
-            or selection.get("metric") != "v5_validation_loss"
-            or not isinstance(selection.get("selected_epoch"), int)
-            or isinstance(selection.get("selected_epoch"), bool)
-            or selection["selected_epoch"] < 1
-            or not isinstance(selection.get("value"), (int, float))
+            or not isinstance(selection_epoch, int)
+            or isinstance(selection_epoch, bool)
+            or selection_epoch < 1
+            or not (loss_selection or spatial_selection)
         ):
             raise TrainingRunError("resnet18.v5 checkpoint checkpoint_selection is invalid")
         if value.get("epochs") != 30:

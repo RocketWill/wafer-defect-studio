@@ -84,6 +84,27 @@ class SpatialLogitModelV5Test(unittest.TestCase):
                 )
             )
 
+            checkpoint["checkpoint_selection"] = {
+                "source": "validation",
+                "metric": "validation_spatial_metrics",
+                "selected_epoch": 11,
+                "per_class": {
+                    code: {
+                        "defect_coverage_recall": 1.0,
+                        "grid_precision": 1.0,
+                        "grid_recall": 1.0,
+                        "normal_grid_leak_rate": 0.0,
+                        "asserted_grid_occupancy_p95": 0.01,
+                    }
+                    for code in ("scratch", "particle")
+                },
+            }
+            torch.save(checkpoint, path)
+            self.assertEqual(
+                validate_project_checkpoint(path)["checkpoint_selection"]["selected_epoch"],
+                11,
+            )
+
             checkpoint["feature_stride"] = 4
             torch.save(checkpoint, path)
             with self.assertRaisesRegex(TrainingRunError, "feature_stride must be 2"):

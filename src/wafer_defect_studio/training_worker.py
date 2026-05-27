@@ -475,7 +475,9 @@ def run_worker(
                 if step_delay:
                     time.sleep(step_delay)
 
-            if validation_loader is not None:
+            if validation_loader is not None and (
+                not config.retain_epoch_states or epoch == total_epochs
+            ):
                 validation_loss = _evaluate_v5_validation_loss(
                     model, validation_loader, config, device, positive_class_weights
                 )
@@ -487,13 +489,13 @@ def run_worker(
                         name: value.detach().cpu().clone()
                         for name, value in model.state_dict().items()
                     }
-                if config.retain_epoch_states:
-                    epoch_dir = staging / "epoch-states"
-                    epoch_dir.mkdir(exist_ok=True)
-                    torch.save(
-                        {name: value.detach().cpu() for name, value in model.state_dict().items()},
-                        epoch_dir / f"epoch-{epoch:03d}.pt",
-                    )
+            if config.retain_epoch_states:
+                epoch_dir = staging / "epoch-states"
+                epoch_dir.mkdir(exist_ok=True)
+                torch.save(
+                    {name: value.detach().cpu() for name, value in model.state_dict().items()},
+                    epoch_dir / f"epoch-{epoch:03d}.pt",
+                )
 
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict, strict=True)

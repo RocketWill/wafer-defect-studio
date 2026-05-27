@@ -61,7 +61,7 @@ def select_validation_spatial_epoch(
         if candidate.get("source_split") != "validation":
             raise ValueError("checkpoint selection requires validation spatial metrics")
         per_class = candidate.get("per_class")
-        if not isinstance(per_class, Mapping) or tuple(per_class) != codes:
+        if not isinstance(per_class, Mapping) or set(per_class) != set(codes):
             raise ValueError("validation spatial candidate class order drift")
         rows = tuple(per_class[code] for code in codes)
         values = tuple(_selection_values(row) for row in rows)
@@ -220,7 +220,7 @@ def _materialize_bundle(
                 ),
             ))
     bundle = TrainingInputBundle(
-        "ticket31-development", f"ticket31-seed-{config.seed}", CLASS_CODES,
+        config.snapshot_id, config.split_id, CLASS_CODES,
         (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 0.0, 100.0),),
         tuple(sources), (), 2, tuple(bags),
     )
@@ -253,14 +253,22 @@ def _train(config: TrainingConfig, bundle_path: Path, staging: Path) -> Path:
 
 
 def _score_source(checkpoint_path: Path, source: np.ndarray) -> np.ndarray:
+    return _score_sources(checkpoint_path, (source,))[0]
+
+
+def _score_sources(checkpoint_path: Path, sources) -> tuple[np.ndarray, ...]:
     model, checkpoint = load_project_checkpoint(checkpoint_path, device="cuda", expected_class_codes=CLASS_CODES)
     bounds = NormalizationBounds(**checkpoint["normalization_bounds"][0])
+    return tuple(_score_source_model(model, bounds, source) for source in sources)
+
+
+def _score_source_model(model, bounds: NormalizationBounds, source: np.ndarray) -> np.ndarray:
     windows = enumerate_inference_windows(1536, 1536, 128, 64)
     local = []
     model.eval()
     with torch.no_grad():
-        for start in range(0, len(windows), 64):
-            selected = windows[start:start + 64]
+        for start in range(0, len(windows), 128):
+            selected = windows[start:start + 128]
             inputs = torch.stack([
                 extract_model_patch(source, bounds, top=window.y, left=window.x, size=128)
                 for window in selected

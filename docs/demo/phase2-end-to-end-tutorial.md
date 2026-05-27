@@ -20,6 +20,16 @@ stop condition，不執行 final held-out gate；CAM v2 維持預設，v5 維持
 experimental。這也不是 Neurocle 等價、segmentation 或 production accuracy
 聲明。
 
+Ticket 32 修正 Ticket 31 已知的 checkpoint selection、selected-epoch metadata
+與 development corpus diversity 問題，並在同一張 RTX 3090 重跑五個 seeds。
+repaired development gate 仍為 **FAIL**：10 個 seed/class rows 僅 2 個通過，
+其餘 8 個出現 whole-wafer activation；五個 seeds 都由 validation spatial
+selector 選到 epoch 1。完整報告在
+[`ticket32-development-gate.json`](ticket32-development-gate.json)。依 stop
+condition，仍不執行 final held-out gate；CAM v2 維持預設，v5 維持
+experimental。這不是 Neurocle 等價、segmentation 或 production accuracy
+聲明。
+
 ## 執行 Demo
 
 在 repository root 執行 realistic-source GPU Demo：

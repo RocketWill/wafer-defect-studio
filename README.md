@@ -52,6 +52,16 @@ This blocks final held-out execution; CAM v2 remains the default and v5 remains
 experimental. It does not establish Neurocle equivalence, segmentation, or
 production accuracy.
 
+Ticket 32 corrected the known Ticket 31 evidence defects and replayed the same
+five development seeds on the RTX 3090 with validation-spatial checkpoint
+selection and a more diverse development corpus. The repaired gate remains
+**FAIL**: only 2 of 10 seed/class rows passed, while 8 rows collapsed to
+whole-wafer activation. All five selectors chose epoch 1. The tracked report is
+[`docs/demo/ticket32-development-gate.json`](docs/demo/ticket32-development-gate.json).
+The stop condition continues to block final held-out execution; CAM v2 remains
+the default and v5 remains experimental. This result does not claim Neurocle
+equivalence, segmentation, or production accuracy.
+
 ### Phase 2 UI snapshots
 
 <p>

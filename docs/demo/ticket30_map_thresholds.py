@@ -12,9 +12,10 @@ import numpy
 from docs.demo.spatial_thresholds import CANDIDATE_POLICY, TARGETS
 from docs.demo.wafer_quality_evidence import (
     WaferEvidenceCase,
-    compute_wafer_quality_evidence,
+    _defect_pixel_bounds,
     quality_relevant_threshold_candidates,
 )
+from docs.demo.defect_oracle import defect_intersects_rectangle
 
 
 SCHEMA = "ticket30-map-thresholds.v1"
@@ -45,10 +46,10 @@ def calibrate_map_thresholds(
         ]
         if any(values.size and (values.min() < 0 or values.max() > 1) for values in finite_ranges):
             raise ValueError(f"{code}: map threshold candidates must be in [0, 1]")
+        metric_index = _build_metric_index(validation_cases, class_index, code)
         evaluated = []
         for threshold in quality_relevant_threshold_candidates(validation_cases, class_index):
-            thresholds = {candidate: (threshold if candidate == code else 1.0) for candidate in codes}
-            metrics = compute_wafer_quality_evidence(validation_cases, codes, thresholds)["per_class"][code]
+            metrics = _indexed_metrics(metric_index, threshold)
             evaluated.append((threshold, metrics, _target_satisfied(metrics)))
         feasible = [entry for entry in evaluated if entry[2]]
         winner = max(feasible, key=lambda entry: entry[0]) if feasible else max(
@@ -68,6 +69,86 @@ def calibrate_map_thresholds(
         "candidate_policy": CANDIDATE_POLICY,
         "targets": dict(TARGETS),
         "selected": selected,
+    }
+
+
+def _build_metric_index(cases, class_index: int, code: str):
+    defect_maxima = []
+    grids = []
+    for case in cases:
+        class_map = numpy.asarray(case.absolute_maps)[:, :, class_index]
+        truth = case.oracle.grid_truth(case.grids)
+        for defect in case.oracle.defects:
+            if defect.class_code != code:
+                continue
+            left, top, right, bottom = _defect_pixel_bounds(
+                defect, case.oracle.image_width, case.oracle.image_height
+            )
+            values = (
+                float(class_map[y, x])
+                for y in range(top, bottom)
+                for x in range(left, right)
+                if defect_intersects_rectangle(defect, x, y, x + 1, y + 1)
+                and numpy.isfinite(class_map[y, x])
+            )
+            defect_maxima.append(max(values, default=-inf))
+        for grid in case.grids:
+            left, top = max(0, grid.x), max(0, grid.y)
+            right = min(case.oracle.image_width, grid.x + grid.width)
+            bottom = min(case.oracle.image_height, grid.y + grid.height)
+            area = (right - left) * (bottom - top)
+            if not area:
+                continue
+            finite = class_map[top:bottom, left:right]
+            finite = finite[numpy.isfinite(finite)]
+            grids.append((
+                code in truth[(grid.row, grid.column)],
+                float(finite.max()) if finite.size else -inf,
+                numpy.sort(finite) if code in truth[(grid.row, grid.column)] else None,
+                area,
+            ))
+    return defect_maxima, grids
+
+
+def _indexed_metrics(index, threshold: float) -> dict[str, object]:
+    defect_maxima, grids = index
+    covered = sum(value >= threshold for value in defect_maxima)
+    tp = fp = fn = normal = 0
+    occupancies = []
+    for actual, maximum, sorted_values, area in grids:
+        predicted = maximum >= threshold
+        if actual and predicted:
+            tp += 1
+        elif actual:
+            fn += 1
+        elif predicted:
+            fp += 1
+        if not actual:
+            normal += 1
+        else:
+            asserted = len(sorted_values) - int(
+                numpy.searchsorted(sorted_values, threshold, side="left")
+            )
+            occupancies.append(asserted / area)
+    occupancies.sort()
+    precision_denominator = tp + fp
+    recall_denominator = tp + fn
+    return {
+        "defect_instances": len(defect_maxima),
+        "covered_defect_instances": covered,
+        "defect_coverage_recall": covered / len(defect_maxima) if defect_maxima else None,
+        "grid_tp": tp,
+        "grid_fp": fp,
+        "grid_fn": fn,
+        "grid_precision": tp / precision_denominator if precision_denominator else None,
+        "grid_recall": tp / recall_denominator if recall_denominator else None,
+        "normal_grid_leaks": fp,
+        "normal_grids": normal,
+        "normal_grid_leak_rate": fp / normal if normal else None,
+        "asserted_grid_occupancy_p95": (
+            occupancies[(95 * len(occupancies) + 99) // 100 - 1]
+            if occupancies else None
+        ),
     }
 
 
