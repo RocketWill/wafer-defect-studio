@@ -487,6 +487,13 @@ def run_worker(
                         name: value.detach().cpu().clone()
                         for name, value in model.state_dict().items()
                     }
+                if config.retain_epoch_states:
+                    epoch_dir = staging / "epoch-states"
+                    epoch_dir.mkdir(exist_ok=True)
+                    torch.save(
+                        {name: value.detach().cpu() for name, value in model.state_dict().items()},
+                        epoch_dir / f"epoch-{epoch:03d}.pt",
+                    )
 
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict, strict=True)
@@ -802,6 +809,16 @@ def _write_staged_artifacts(
         "batch_size": config.batch_size,
         "device": str(device),
     }
+    if spatial_v5:
+        metrics.update(
+            {
+                "final_epoch_training_loss": final_loss,
+                "checkpoint_epoch": selected_epoch,
+                "checkpoint_selection_metric": "v5_validation_loss",
+                "checkpoint_selection_value": selected_validation_loss,
+                "retained_epoch_states": base_epochs if config.retain_epoch_states else 0,
+            }
+        )
     if refinement_epochs:
         metrics.update({"base_epochs": base_epochs, "refinement_epochs": refinement_epochs})
     metrics_path.write_text(

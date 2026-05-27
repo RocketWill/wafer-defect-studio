@@ -69,6 +69,7 @@ class TrainingConfig(_VersionedMessage):
     training_policy: str = "legacy"
     priority_normal_bag_ids: tuple[str, ...] = ()
     hard_negative_selection_sha256: str | None = None
+    retain_epoch_states: bool = False
 
     def __post_init__(self) -> None:
         for name in ("snapshot_id", "split_id", "architecture", "device", "weights_policy"):
@@ -134,6 +135,10 @@ class TrainingConfig(_VersionedMessage):
             )
         if priority_ids and self.training_policy != "spatial_mil_v4":
             raise TrainingProtocolError("hard-negative refinement requires spatial_mil_v4")
+        if not isinstance(self.retain_epoch_states, bool):
+            raise TrainingProtocolError("retain_epoch_states must be boolean")
+        if self.retain_epoch_states and self.training_policy != "spatial_mil_v5":
+            raise TrainingProtocolError("epoch replay states require spatial_mil_v5")
 
     def validate_patch_geometry(self, sample_width: int, sample_height: int) -> None:
         """Reject configured Model Patches that cannot fit one frozen Grid sample."""
@@ -165,6 +170,7 @@ class TrainingConfig(_VersionedMessage):
             "training_policy": self.training_policy,
             "priority_normal_bag_ids": list(self.priority_normal_bag_ids),
             "hard_negative_selection_sha256": self.hard_negative_selection_sha256,
+            "retain_epoch_states": self.retain_epoch_states,
         }
 
     @classmethod
@@ -185,6 +191,9 @@ class TrainingConfig(_VersionedMessage):
                 "hard_negative_selection_sha256": None,
             }
             supplied.update(("priority_normal_bag_ids", "hard_negative_selection_sha256"))
+        if "retain_epoch_states" not in supplied:
+            value = {**value, "retain_epoch_states": False}
+            supplied.add("retain_epoch_states")
         _require_keys(value, expected, "config")
         try:
             return cls(**value)

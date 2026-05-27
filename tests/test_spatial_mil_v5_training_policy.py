@@ -40,6 +40,16 @@ class SpatialMilV5TrainingPolicyTest(unittest.TestCase):
                 hard_negative_selection_sha256="0" * 64,
             )
 
+    def test_protocol_can_explicitly_retain_epoch_states_for_spatial_replay(self) -> None:
+        config = TrainingConfig(
+            "snapshot", "split", 2, 30, 4, learning_rate=0.0003,
+            patch_size=128, patch_stride=64, training_policy="spatial_mil_v5",
+            retain_epoch_states=True,
+        )
+        restored = TrainingConfig.from_json(config.to_json())
+        self.assertTrue(restored.retain_epoch_states)
+        self.assertTrue(restored.to_dict()["retain_epoch_states"])
+
 
 if __name__ == "__main__":
     unittest.main()
