@@ -34,8 +34,8 @@ class Ticket31DevelopmentGateTest(unittest.TestCase):
                 cases, _training_config(101), Path(temporary_directory)
             ).bundle
         self.assertEqual({source.split for source in bundle.sources}, {"train", "validation"})
-        self.assertEqual(len(bundle.sources), 18)
-        self.assertEqual(len(bundle.patch_bags), 18 * 9)
+        self.assertEqual(len(bundle.sources), 48)
+        self.assertEqual(len(bundle.patch_bags), 48 * 9)
         self.assertTrue(all(len(bag.patches) == 49 for bag in bundle.patch_bags))
 
     def test_row_requires_every_frozen_target(self) -> None:

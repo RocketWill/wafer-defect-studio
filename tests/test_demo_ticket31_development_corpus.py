@@ -15,7 +15,7 @@ class Ticket31DevelopmentCorpusTest(unittest.TestCase):
     def test_freezes_position_diverse_grid_only_development_cases(self) -> None:
         corpus = build_ticket31_development_corpus()
 
-        self.assertEqual(len(corpus), 90)
+        self.assertEqual(len(corpus), 240)
         self.assertEqual(tuple(dict.fromkeys(case.seed for case in corpus)), DEVELOPMENT_SEEDS)
         self.assertFalse({case.filename for case in corpus} & set(FINAL_MEMBERS))
         self.assertEqual(len({case.filename for case in corpus}), len(corpus))
@@ -30,7 +30,7 @@ class Ticket31DevelopmentCorpusTest(unittest.TestCase):
                 cases = tuple(
                     case for case in corpus if case.seed == seed and case.split == split
                 )
-                self.assertEqual(len(cases), 9)
+                self.assertEqual(len(cases), 24)
                 self.assertEqual(
                     {case.family for case in cases}, {f"ticket31-{split}-{seed}"}
                 )
@@ -43,12 +43,17 @@ class Ticket31DevelopmentCorpusTest(unittest.TestCase):
                     }
                     self.assertEqual(covered, expected_grids)
                 self.assertEqual({case.position_bin for case in cases}, {"near", "center", "far"})
-                self.assertEqual({case.scratch_orientation for case in cases}, {"horizontal", "vertical", "diagonal"})
-                self.assertEqual({case.scratch_length for case in cases}, {24, 48, 80})
-                self.assertEqual({case.particle_radius for case in cases}, {2, 3, 5})
+                self.assertEqual({case.composition for case in cases}, {"normal", "scratch", "particle", "both"})
+                self.assertEqual({case.scratch_count for case in cases}, {0, 1, 2})
+                self.assertEqual({case.particle_count for case in cases}, {0, 1, 2})
+                self.assertGreaterEqual(sum(case.scratch_count for case in cases), 18)
+                self.assertGreaterEqual(sum(case.particle_count for case in cases), 18)
+                self.assertEqual({case.scratch_orientation for case in cases if case.scratch_orientation}, {"horizontal", "vertical", "diagonal"})
+                self.assertEqual({case.scratch_length for case in cases if case.scratch_length}, {24, 48, 80})
+                self.assertEqual({case.particle_radius for case in cases if case.particle_radius}, {2, 3, 5})
                 self.assertEqual({case.contrast_bin for case in cases}, {"low", "medium", "high"})
 
-        first = corpus[0]
+        first = next(case for case in corpus if case.instances)
         pixels = render_ticket31_development_pixels(first)
         self.assertEqual(pixels.shape, (1536, 1536))
         self.assertEqual(pixels.dtype, np.uint8)

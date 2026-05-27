@@ -27,10 +27,13 @@ class DevelopmentCase:
     split: str
     instances: tuple[DevelopmentInstance, ...]
     oracle: DefectOracle
+    composition: str
+    scratch_count: int
+    particle_count: int
     position_bin: str
-    scratch_orientation: str
-    scratch_length: int
-    particle_radius: int
+    scratch_orientation: str | None
+    scratch_length: int | None
+    particle_radius: int | None
     contrast_bin: str
     background_index: int
     pixel_sha256: str
@@ -52,22 +55,53 @@ def build_ticket31_development_corpus() -> tuple[DevelopmentCase, ...]:
     for seed_index, seed in enumerate(DEVELOPMENT_SEEDS):
         for split_index, split in enumerate(("train", "validation")):
             family = f"ticket31-{split}-{seed}"
-            for index in range(9):
-                scratch_grid = divmod(index, 3)
-                particle_grid = divmod((index + 4 + seed_index + split_index) % 9, 3)
+            for index in range(24):
+                composition = ("normal", "scratch", "particle", "both")[index % 4]
+                variant = index // 4
+                scratch_count = (
+                    1 + variant % 2 if composition in {"scratch", "both"} else 0
+                )
+                particle_count = (
+                    1 + variant % 2 if composition in {"particle", "both"} else 0
+                )
                 position_bin = tuple(_POSITIONS)[(index + seed_index) % 3]
                 orientation = _ORIENTATIONS[(index + split_index) % 3]
                 length = _LENGTHS[(index + seed_index + split_index) % 3]
                 radius = _RADII[(index // 3 + seed_index + split_index) % 3]
                 contrast_bin = tuple(_CONTRASTS)[(index + 2 * seed_index + split_index) % 3]
-                scratch = _scratch(scratch_grid, position_bin, orientation, length)
-                particle = _particle(particle_grid, position_bin, radius)
                 prefix = f"ticket31-{seed}-{split}-{index:02d}"
-                instances = (
-                    DevelopmentInstance(f"{prefix}-scratch", scratch),
-                    DevelopmentInstance(f"{prefix}-particle", particle),
+                instances = []
+                for instance_index in range(scratch_count):
+                    grid = divmod(
+                        (variant + (3 if composition == "both" else 0)
+                         + 3 * instance_index + seed_index) % 9,
+                        3,
+                    )
+                    defect = _scratch(
+                        grid, position_bin,
+                        _ORIENTATIONS[(index + split_index + instance_index) % 3],
+                        _LENGTHS[(index + seed_index + split_index + instance_index) % 3],
+                    )
+                    instances.append(DevelopmentInstance(
+                        f"{prefix}-scratch-{instance_index}", defect
+                    ))
+                for instance_index in range(particle_count):
+                    grid = divmod(
+                        (variant + (3 if composition == "both" else 0) + 4
+                         + 2 * instance_index + seed_index + split_index) % 9,
+                        3,
+                    )
+                    defect = _particle(
+                        grid, position_bin,
+                        _RADII[(index // 3 + seed_index + split_index + instance_index) % 3],
+                    )
+                    instances.append(DevelopmentInstance(
+                        f"{prefix}-particle-{instance_index}", defect
+                    ))
+                instances = tuple(instances)
+                oracle = DefectOracle(
+                    1536, 1536, tuple(instance.defect for instance in instances)
                 )
-                oracle = DefectOracle(1536, 1536, (scratch, particle))
                 case = DevelopmentCase(
                     seed=seed,
                     filename=f"{prefix}.png",
@@ -75,10 +109,13 @@ def build_ticket31_development_corpus() -> tuple[DevelopmentCase, ...]:
                     split=split,
                     instances=instances,
                     oracle=oracle,
+                    composition=composition,
+                    scratch_count=scratch_count,
+                    particle_count=particle_count,
                     position_bin=position_bin,
-                    scratch_orientation=orientation,
-                    scratch_length=length,
-                    particle_radius=radius,
+                    scratch_orientation=orientation if scratch_count else None,
+                    scratch_length=length if scratch_count else None,
+                    particle_radius=radius if particle_count else None,
                     contrast_bin=contrast_bin,
                     background_index=seed_index * 29 + split_index * 13 + index,
                     pixel_sha256="",
