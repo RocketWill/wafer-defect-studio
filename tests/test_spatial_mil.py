@@ -11,6 +11,7 @@ from wafer_defect_studio.spatial_mil import (
     overlap_consistency_loss,
     positive_spatial_mil_loss,
     positive_spatial_topk_loss,
+    same_image_grid_ranking_loss,
 )
 from wafer_defect_studio.training_input_bundle import (
     TrainingBundleSource,
@@ -90,6 +91,24 @@ class GridContrastiveV6LossTest(unittest.TestCase):
         self.assertGreater(
             dense_absent_class_loss(whole_map, torch.tensor([[0]])).item(),
             dense_absent_class_loss(localized, torch.tensor([[0]])).item(),
+        )
+
+    def test_ranking_uses_only_normal_grids_from_the_same_wafer_image(self) -> None:
+        logits = torch.tensor([2.0, 1.75, 9.0]).reshape(3, 1, 1, 1, 1)
+        targets = torch.tensor([[1], [0], [0]])
+
+        loss = same_image_grid_ranking_loss(
+            logits, targets, ("wafer-a", "wafer-a", "wafer-b"), margin=0.5
+        )
+        torch.testing.assert_close(loss, torch.tensor(0.25))
+
+        separated = logits.clone()
+        separated[1] = 1.0
+        torch.testing.assert_close(
+            same_image_grid_ranking_loss(
+                separated, targets, ("wafer-a", "wafer-a", "wafer-b"), margin=0.5
+            ),
+            torch.tensor(0.0),
         )
 
 

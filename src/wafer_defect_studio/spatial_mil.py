@@ -112,6 +112,40 @@ def positive_spatial_topk_loss(
     return present.mean()
 
 
+def same_image_grid_ranking_loss(
+    logits: Tensor,
+    targets: Tensor,
+    image_group_ids: Sequence[str],
+    *,
+    margin: float = 0.5,
+    top_fraction: float = 0.01,
+) -> Tensor:
+    """Rank asserted Annotation Grids above same-image Normal Grids."""
+
+    if len(image_group_ids) != logits.shape[0]:
+        raise ValueError("image_group_ids length must match the bag batch")
+    if not isfinite(margin) or margin < 0:
+        raise ValueError("margin must be a non-negative finite number")
+    if not isfinite(top_fraction) or not 0 < top_fraction <= 1:
+        raise ValueError("top_fraction must be finite in the range (0, 1]")
+    flattened = _flatten_spatial_logits(logits)
+    count = max(1, ceil(flattened.shape[-1] * top_fraction))
+    scores = torch.topk(flattened, count, dim=-1).values.mean(dim=-1)
+    losses = []
+    for group_id in dict.fromkeys(image_group_ids):
+        members = torch.tensor(
+            [value == group_id for value in image_group_ids], device=logits.device
+        )
+        for class_index in range(targets.shape[1]):
+            asserted = scores[members & (targets[:, class_index] == 1), class_index]
+            normal = scores[members & (targets[:, class_index] == 0), class_index]
+            if asserted.numel() and normal.numel():
+                losses.append(F.relu(margin + normal.max() - asserted.min()))
+    if not losses:
+        return logits.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
 def dense_absent_class_loss(
     logits: Tensor,
     targets: Tensor,
@@ -218,4 +252,5 @@ __all__ = [
     "positive_spatial_mil_loss",
     "positive_spatial_topk_loss",
     "present_sparse_budget_loss",
+    "same_image_grid_ranking_loss",
 ]
