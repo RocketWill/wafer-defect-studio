@@ -132,13 +132,14 @@ def same_image_grid_ranking_loss(
     count = max(1, ceil(flattened.shape[-1] * top_fraction))
     scores = torch.topk(flattened, count, dim=-1).values.mean(dim=-1)
     losses = []
+    normal_grids = targets.sum(dim=1) == 0
     for group_id in dict.fromkeys(image_group_ids):
         members = torch.tensor(
             [value == group_id for value in image_group_ids], device=logits.device
         )
         for class_index in range(targets.shape[1]):
             asserted = scores[members & (targets[:, class_index] == 1), class_index]
-            normal = scores[members & (targets[:, class_index] == 0), class_index]
+            normal = scores[members & normal_grids, class_index]
             if asserted.numel() and normal.numel():
                 losses.append(F.relu(margin + normal.max() - asserted.min()))
     if not losses:

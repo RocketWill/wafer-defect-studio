@@ -111,6 +111,21 @@ class GridContrastiveV6LossTest(unittest.TestCase):
             torch.tensor(0.0),
         )
 
+    def test_ranking_does_not_treat_another_class_assertion_as_a_normal_grid(self) -> None:
+        logits = torch.tensor([
+            [[[[2.0]], [[0.0]]]],
+            [[[[9.0]], [[2.0]]]],
+            [[[[1.0]], [[1.0]]]],
+        ])
+        targets = torch.tensor([[1, 0], [0, 1], [0, 0]])
+
+        torch.testing.assert_close(
+            same_image_grid_ranking_loss(
+                logits, targets, ("wafer-a",) * 3, margin=0.5
+            ),
+            torch.tensor(0.0),
+        )
+
 
 class AbsentClassHardNegativeLossTest(unittest.TestCase):
     def test_pools_patch_and_spatial_dimensions_for_5d_bags(self) -> None:
