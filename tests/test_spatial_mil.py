@@ -6,9 +6,11 @@ import torch.nn.functional as F
 from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.spatial_mil import (
     absent_class_hard_negative_loss,
+    dense_absent_class_loss,
     derive_train_positive_class_weights,
     overlap_consistency_loss,
     positive_spatial_mil_loss,
+    positive_spatial_topk_loss,
 )
 from wafer_defect_studio.training_input_bundle import (
     TrainingBundleSource,
@@ -69,6 +71,26 @@ class PositiveSpatialMilLossTest(unittest.TestCase):
 
         self.assertEqual(0.0, loss.item())
         self.assertTrue(torch.equal(logits.grad, torch.zeros_like(logits)))
+
+
+class GridContrastiveV6LossTest(unittest.TestCase):
+    def test_localized_positive_is_enough_while_absent_whole_map_is_penalized(self) -> None:
+        localized = torch.full((1, 1, 10, 10), -5.0)
+        localized[0, 0, 4, 7] = 5.0
+        whole_map = torch.full((1, 1, 10, 10), 5.0)
+
+        localized_positive = positive_spatial_topk_loss(
+            localized, torch.tensor([[1]]), top_fraction=0.01
+        )
+        whole_map_positive = positive_spatial_topk_loss(
+            whole_map, torch.tensor([[1]]), top_fraction=0.01
+        )
+        torch.testing.assert_close(localized_positive, F.softplus(torch.tensor(-5.0)))
+        torch.testing.assert_close(localized_positive, whole_map_positive)
+        self.assertGreater(
+            dense_absent_class_loss(whole_map, torch.tensor([[0]])).item(),
+            dense_absent_class_loss(localized, torch.tensor([[0]])).item(),
+        )
 
 
 class AbsentClassHardNegativeLossTest(unittest.TestCase):

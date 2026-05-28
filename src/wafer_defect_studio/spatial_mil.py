@@ -89,6 +89,29 @@ def positive_spatial_lse_loss(
     return present.mean()
 
 
+def positive_spatial_topk_loss(
+    logits: Tensor,
+    targets: Tensor,
+    class_weights: Tensor | None = None,
+    *,
+    top_fraction: float = 0.01,
+) -> Tensor:
+    """Reward localized evidence in the highest-scoring present-class locations."""
+
+    if not isfinite(top_fraction) or not 0 < top_fraction <= 1:
+        raise ValueError("top_fraction must be finite in the range (0, 1]")
+    flattened = _flatten_spatial_logits(logits)
+    count = max(1, ceil(flattened.shape[-1] * top_fraction))
+    pooled = torch.topk(flattened, count, dim=-1).values.mean(dim=-1)
+    losses = F.softplus(-pooled)
+    if class_weights is not None:
+        losses = losses * class_weights.to(device=logits.device, dtype=logits.dtype)
+    present = losses[targets == 1]
+    if present.numel() == 0:
+        return logits.sum() * 0.0
+    return present.mean()
+
+
 def dense_absent_class_loss(
     logits: Tensor,
     targets: Tensor,
@@ -193,5 +216,6 @@ __all__ = [
     "overlap_consistency_loss",
     "positive_spatial_lse_loss",
     "positive_spatial_mil_loss",
+    "positive_spatial_topk_loss",
     "present_sparse_budget_loss",
 ]
