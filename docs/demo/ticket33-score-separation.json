@@ -1,0 +1,26 @@
+{
+  "per_seed": {
+    "101": {
+      "particle": {"asserted_grid_count": 18, "collapsed": false, "hardest_normal_grid_top_score": 0.12408447265625, "margin": 0.55218505859375, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.67626953125},
+      "scratch": {"asserted_grid_count": 18, "collapsed": true, "hardest_normal_grid_top_score": 0.99951171875, "margin": -0.557861328125, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.441650390625}
+    },
+    "211": {
+      "particle": {"asserted_grid_count": 18, "collapsed": true, "hardest_normal_grid_top_score": 0.87939453125, "margin": -0.00439453125, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.875},
+      "scratch": {"asserted_grid_count": 18, "collapsed": true, "hardest_normal_grid_top_score": 0.99951171875, "margin": -0.2568359375, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.74267578125}
+    },
+    "307": {
+      "particle": {"asserted_grid_count": 18, "collapsed": true, "hardest_normal_grid_top_score": 0.85693359375, "margin": -0.3154296875, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.54150390625},
+      "scratch": {"asserted_grid_count": 18, "collapsed": true, "hardest_normal_grid_top_score": 0.798828125, "margin": -0.10986328125, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.68896484375}
+    },
+    "401": {
+      "particle": {"asserted_grid_count": 18, "collapsed": true, "hardest_normal_grid_top_score": 0.7099609375, "margin": -0.0791015625, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.630859375},
+      "scratch": {"asserted_grid_count": 18, "collapsed": true, "hardest_normal_grid_top_score": 0.9287109375, "margin": -0.02880859375, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.89990234375}
+    },
+    "503": {
+      "particle": {"asserted_grid_count": 18, "collapsed": false, "hardest_normal_grid_top_score": 0.11077880859375, "margin": 0.05364990234375, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.1644287109375},
+      "scratch": {"asserted_grid_count": 18, "collapsed": true, "hardest_normal_grid_top_score": 0.4462890625, "margin": -0.003662109375, "normal_grid_count": 198, "top_fraction": 0.01, "weakest_asserted_grid_top_score": 0.442626953125}
+    }
+  },
+  "schema": "ticket33-score-separation.v1",
+  "source_report_sha256": "86975889d8da42a80e0bd565db25a7aae0966b32f83995412a4d42b9d6d2d7c6"
+}
