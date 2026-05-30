@@ -62,6 +62,16 @@ The stop condition continues to block final held-out execution; CAM v2 remains
 the default and v5 remains experimental. This result does not claim Neurocle
 equivalence, segmentation, or production accuracy.
 
+Ticket 33 tested Grid-contrastive Spatial MIL v6, replacing distributed
+positive supervision with top-1% localized evidence, dense absent-class
+suppression, and same-image asserted-vs-Normal Grid ranking. Its real RTX 3090
+five-seed development gate is **PASS**: all 10 seed/class rows reached Grid
+precision/recall 1.0 with zero Normal Grid leakage. The tracked report is
+[`docs/demo/ticket33-development-gate.json`](docs/demo/ticket33-development-gate.json).
+This development result only recommends running a separately scoped final
+held-out gate. CAM v2 remains the default; it does not establish Neurocle
+equivalence, segmentation, or production accuracy.
+
 ### Phase 2 UI snapshots
 
 <p>

@@ -45,7 +45,7 @@ def run_micro_overfit(output_root: Path, *, epochs: int = 30) -> dict[str, objec
         for case in build_ticket31_development_corpus()
         if case.seed == 101 and case.split == "train" and case.filename.endswith(("00.png", "01.png", "02.png", "03.png"))
     )
-    model, losses = train_grid_contrastive_model(cases, output_root, epochs=epochs)
+    model, losses = train_grid_contrastive_model(cases, output_root, epochs=epochs, seed=101)
 
     bounds = NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 0.0, 100.0)
     maps = tuple(
@@ -65,11 +65,11 @@ def run_micro_overfit(output_root: Path, *, epochs: int = 30) -> dict[str, objec
     }
 
 
-def train_grid_contrastive_model(cases, output_root: Path, *, epochs: int):
-    torch.manual_seed(101)
+def train_grid_contrastive_model(cases, output_root: Path, *, epochs: int, seed: int):
+    torch.manual_seed(seed)
     config = TrainingConfig(
-        "ticket33-grid-contrastive", "ticket33-seed-101", len(CLASS_CODES),
-        30, 2, device="cuda", seed=101, learning_rate=0.0003,
+        "ticket33-grid-contrastive", f"ticket33-seed-{seed}", len(CLASS_CODES),
+        30, 2, device="cuda", seed=seed, learning_rate=0.0003,
         weights_policy="imagenet", patch_size=128, patch_stride=64,
         training_policy="spatial_mil_v5",
     )
@@ -116,7 +116,7 @@ def train_grid_contrastive_model(cases, output_root: Path, *, epochs: int):
             optimizer.step()
             epoch_losses.append(float(loss.detach().cpu()))
         losses.append(sum(epoch_losses) / len(epoch_losses))
-        print(f"Ticket 33 micro-overfit: epoch {epoch + 1}/{epochs} loss={losses[-1]:.6f}", flush=True)
+        print(f"Ticket 33 seed {seed}: epoch {epoch + 1}/{epochs} loss={losses[-1]:.6f}", flush=True)
 
     return model, losses
 

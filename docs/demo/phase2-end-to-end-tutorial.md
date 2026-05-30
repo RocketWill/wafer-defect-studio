@@ -30,6 +30,14 @@ condition，仍不執行 final held-out gate；CAM v2 維持預設，v5 維持
 experimental。這不是 Neurocle 等價、segmentation 或 production accuracy
 聲明。
 
+Ticket 33 的 Grid-contrastive Spatial MIL v6 改用 top-1% localized positive
+evidence、dense absent-class suppression 與同圖 asserted-vs-Normal Grid
+ranking。RTX 3090 五個 development seeds 的 10/10 rows 全部 **PASS**：Grid
+precision/recall 皆為 1.0，Normal Grid leakage 皆為 0。完整報告在
+[`ticket33-development-gate.json`](ticket33-development-gate.json)。這只解封
+後續獨立的 final held-out gate；CAM v2 仍是預設，且不構成 Neurocle 等價、
+segmentation 或 production accuracy 聲明。
+
 ## 執行 Demo
 
 在 repository root 執行 realistic-source GPU Demo：

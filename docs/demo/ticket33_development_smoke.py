@@ -30,9 +30,14 @@ SCHEMA = "ticket33-development-smoke.v1"
 
 
 def run_development_smoke(output_root: Path, *, epochs: int = 30) -> dict[str, object]:
-    cases = tuple(case for case in build_ticket31_development_corpus() if case.seed == 101)
+    report = run_development_seed(101, output_root, epochs=epochs)
+    return {**report, "schema": SCHEMA, "selection_source": "validation"}
+
+
+def run_development_seed(seed: int, output_root: Path, *, epochs: int = 30) -> dict[str, object]:
+    cases = tuple(case for case in build_ticket31_development_corpus() if case.seed == seed)
     validation = tuple(case for case in cases if case.split == "validation")
-    model, losses = train_grid_contrastive_model(cases, output_root, epochs=epochs)
+    model, losses = train_grid_contrastive_model(cases, output_root, epochs=epochs, seed=seed)
     bounds = NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 0.0, 100.0)
     maps = tuple(
         _score_source_model(model, bounds, render_ticket31_development_pixels(case))
@@ -73,10 +78,10 @@ def run_development_smoke(output_root: Path, *, epochs: int = 30) -> dict[str, o
         filenames=np.asarray([case.filename for case in validation]),
         class_codes=np.asarray(CLASS_CODES),
     )
+    torch.save(model.state_dict(), output_root / "model-state.pt")
     return {
-        "schema": SCHEMA,
-        "seed": 101,
-        "selection_source": "validation",
+        "schema": "ticket33-development-seed.v1",
+        "seed": seed,
         "overall": "PASS" if all(row["overall"] == "PASS" for row in rows.values()) else "FAIL",
         "targets": dict(DEVELOPMENT_TARGETS),
         "thresholds": thresholds,
@@ -106,4 +111,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["SCHEMA", "run_development_smoke"]
+__all__ = ["SCHEMA", "run_development_seed", "run_development_smoke"]
