@@ -40,14 +40,35 @@ SCHEMA = "ticket33-micro-overfit.v1"
 def run_micro_overfit(output_root: Path, *, epochs: int = 30) -> dict[str, object]:
     if not torch.cuda.is_available():
         raise RuntimeError("Ticket 33 micro-overfit requires CUDA")
-    torch.manual_seed(101)
     cases = tuple(
         case
         for case in build_ticket31_development_corpus()
         if case.seed == 101 and case.split == "train" and case.filename.endswith(("00.png", "01.png", "02.png", "03.png"))
     )
+    model, losses = train_grid_contrastive_model(cases, output_root, epochs=epochs)
+
+    bounds = NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 0.0, 100.0)
+    maps = tuple(
+        _score_source_model(model, bounds, render_ticket31_development_pixels(case))
+        for case in cases
+    )
+    return {
+        "schema": SCHEMA,
+        "seed": 101,
+        "source_split": "train",
+        "compositions": [case.composition for case in cases],
+        "epochs": epochs,
+        "loss": {"first": losses[0], "last": losses[-1]},
+        "per_class": _separation_rows(cases, maps),
+        "device": {"name": torch.cuda.get_device_name(0), "torch": torch.__version__, "cuda": torch.version.cuda},
+        "claims": ["micro-overfit only", "approximate localization", "not segmentation", "not Neurocle equivalence"],
+    }
+
+
+def train_grid_contrastive_model(cases, output_root: Path, *, epochs: int):
+    torch.manual_seed(101)
     config = TrainingConfig(
-        "ticket33-micro-overfit", "ticket33-seed-101", len(CLASS_CODES),
+        "ticket33-grid-contrastive", "ticket33-seed-101", len(CLASS_CODES),
         30, 2, device="cuda", seed=101, learning_rate=0.0003,
         weights_policy="imagenet", patch_size=128, patch_stride=64,
         training_policy="spatial_mil_v5",
@@ -97,22 +118,7 @@ def run_micro_overfit(output_root: Path, *, epochs: int = 30) -> dict[str, objec
         losses.append(sum(epoch_losses) / len(epoch_losses))
         print(f"Ticket 33 micro-overfit: epoch {epoch + 1}/{epochs} loss={losses[-1]:.6f}", flush=True)
 
-    bounds = NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 0.0, 100.0)
-    maps = tuple(
-        _score_source_model(model, bounds, render_ticket31_development_pixels(case))
-        for case in cases
-    )
-    return {
-        "schema": SCHEMA,
-        "seed": 101,
-        "source_split": "train",
-        "compositions": [case.composition for case in cases],
-        "epochs": epochs,
-        "loss": {"first": losses[0], "last": losses[-1]},
-        "per_class": _separation_rows(cases, maps),
-        "device": {"name": torch.cuda.get_device_name(0), "torch": torch.__version__, "cuda": torch.version.cuda},
-        "claims": ["micro-overfit only", "approximate localization", "not segmentation", "not Neurocle equivalence"],
-    }
+    return model, losses
 
 
 def _training_pairs(bundle):
@@ -181,4 +187,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["SCHEMA", "run_micro_overfit"]
+__all__ = ["SCHEMA", "run_micro_overfit", "train_grid_contrastive_model"]
