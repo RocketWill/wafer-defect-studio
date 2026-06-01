@@ -6,7 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from docs.demo.ticket34_contract import build_ticket34_contract, canonical_contract_json
+from docs.demo.ticket34_contract import (
+    FROZEN_CORPUS_SHA256,
+    build_ticket34_contract,
+    canonical_contract_json,
+)
 from docs.demo.ticket34_preflight import (
     build_preflight_manifest,
     canonical_preflight_manifest_json,
@@ -32,7 +36,9 @@ class Ticket34PreflightTest(unittest.TestCase):
         report_path = root / "ticket33-development-gate.json"
         shutil.copyfile(REPORT_PATH, report_path)
         corpus_path = root / "ticket30_evidence_corpus.py"
-        corpus_path.write_text("FROZEN_CORPUS_SHA256 = 'source-only'\n", encoding="utf-8")
+        corpus_path.write_text(
+            f"FROZEN_CORPUS_SHA256 = '{FROZEN_CORPUS_SHA256}'\n", encoding="utf-8"
+        )
         training_path = root / "ticket33_development_smoke.py"
         training_path.write_text("def train():\n    return None\n", encoding="utf-8")
         evaluation_path = root / "ticket33_development_gate.py"

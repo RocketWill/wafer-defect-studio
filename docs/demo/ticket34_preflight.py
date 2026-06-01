@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -18,6 +19,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from docs.demo.ticket34_contract import (
     FINAL_MEMBERS,
+    FROZEN_CORPUS_SHA256,
     build_ticket34_contract,
     canonical_contract_json,
     validate_ticket33_development_report,
@@ -62,6 +64,7 @@ def build_preflight_manifest(
     corpus_file = Path(corpus_source_path)
     contract = _read_and_validate_contract(contract_file)
     _read_and_validate_report(report_file)
+    _read_and_validate_corpus_source(corpus_file, contract)
 
     files = [
         _file_entry("ticket34_contract", contract_file, root),
@@ -160,6 +163,8 @@ def validate_preflight_manifest(
         validate_ticket33_development_report(report_text)
     except ValueError as error:
         raise ValueError(f"Ticket 33 development report validation failed: {error}") from error
+    corpus_text = _read_manifest_text(by_role["ticket30_corpus_source"], root)
+    _validate_corpus_source_text(corpus_text, expected_contract["final_corpus_sha256"])
     return dict(manifest)
 
 
@@ -268,6 +273,23 @@ def _read_and_validate_report(path: Path) -> None:
         validate_ticket33_development_report(text)
     except ValueError as error:
         raise ValueError(f"Ticket 33 development report validation failed: {error}") from error
+
+
+def _read_and_validate_corpus_source(path: Path, contract: Mapping[str, object]) -> None:
+    text = _read_text(_source_path(path, "Ticket 30 corpus source"), "Ticket 30 corpus source")
+    try:
+        expected = contract["final_corpus_sha256"]
+    except KeyError as error:
+        raise ValueError("Ticket 34 contract is missing final corpus SHA-256") from error
+    _validate_corpus_source_text(text, expected)
+
+
+def _validate_corpus_source_text(text: str, expected: object) -> None:
+    match = re.search(
+        r"(?m)^FROZEN_CORPUS_SHA256\s*=\s*[\"']([0-9a-f]{64})[\"']\s*$", text
+    )
+    if match is None or match.group(1) != expected or expected != FROZEN_CORPUS_SHA256:
+        raise ValueError("Ticket 30 corpus source frozen SHA-256 drift")
 
 
 def _file_entry(role: str, path: Path, root: Path) -> dict[str, object]:
