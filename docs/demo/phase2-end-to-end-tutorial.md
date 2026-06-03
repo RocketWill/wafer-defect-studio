@@ -38,6 +38,25 @@ precision/recall 皆為 1.0，Normal Grid leakage 皆為 0。完整報告在
 後續獨立的 final held-out gate；CAM v2 仍是預設，且不構成 Neurocle 等價、
 segmentation 或 production accuracy 聲明。
 
+Ticket 34 已完成 Grid-contrastive Spatial MIL v6 的 frozen final held-out
+gate。一次 sealed RTX 3090 執行只使用 Ticket 30 的三個 final members
+(`ticket30-evidence-17.png`、`ticket30-evidence-42.png`、
+`ticket30-evidence-91.png`)，涵蓋 `scratch`／`particle` 兩個 Defect Class，
+共 3 × 2 seed/class rows；每列至少有 150 defect instances。Final calibration
+禁止，threshold 只來自 sealed validation artifact。canonical report 是
+[`ticket34-final-gate.json`](ticket34-final-gate.json)，pre-final seal 是
+[`ticket34-final-seal.json`](ticket34-final-seal.json)。
+
+v6 final gate 結果為 **FAIL**。Scratch 三個 seeds 的 defect-coverage recall
+都是 `0.9`，occupancy P95 為
+`0.5312423706054688–0.5492210388183594`（高於 `0.53`）。Particle Grid
+precision 是 `0.5`、Normal Grid leakage 是 `0.125`，occupancy P95 為
+`0.8409576416015625–0.8425254821777344`（高於 `0.84`）。六列都有 positive
+score-separation margins，但 frozen final targets 仍未達成。CAM v2 remains
+the default；v6 remains experimental。No 10–13 screenshots were added；01–09
+remain Ticket 29 evidence。這個結果不宣稱 Neurocle equivalence、segmentation
+或 production accuracy。
+
 ## 執行 Demo
 
 在 repository root 執行 realistic-source GPU Demo：

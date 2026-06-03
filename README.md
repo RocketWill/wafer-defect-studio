@@ -72,6 +72,26 @@ This development result only recommends running a separately scoped final
 held-out gate. CAM v2 remains the default; it does not establish Neurocle
 equivalence, segmentation, or production accuracy.
 
+Ticket 34 completed the frozen final held-out gate for Grid-contrastive Spatial
+MIL v6. The sealed RTX 3090 run used exactly the three Ticket 30 final members
+(`ticket30-evidence-17.png`, `ticket30-evidence-42.png`, and
+`ticket30-evidence-91.png`) across both Defect Classes, for 3 × 2 seed/class
+rows with at least 150 defect instances each. Final calibration was forbidden;
+thresholds came only from the sealed validation artifact. The canonical report
+is [`docs/demo/ticket34-final-gate.json`](docs/demo/ticket34-final-gate.json),
+and the pre-final seal is
+[`docs/demo/ticket34-final-seal.json`](docs/demo/ticket34-final-seal.json).
+
+The v6 final gate is **FAIL**. Scratch defect-coverage recall is `0.9` for all
+three seeds and occupancy P95 is
+`0.5312423706054688–0.5492210388183594` (above `0.53`). Particle Grid
+precision is `0.5`, Normal Grid leakage is `0.125`, and occupancy P95 is
+`0.8409576416015625–0.8425254821777344` (above `0.84`). All six rows have
+positive score-separation margins, but the frozen final targets are still not
+met. CAM v2 remains the default; v6 remains experimental. No 10–13 screenshots
+were added; 01–09 remain Ticket 29 evidence. This result makes no Neurocle
+equivalence, segmentation, or production accuracy claim.
+
 ### Phase 2 UI snapshots
 
 <p>
