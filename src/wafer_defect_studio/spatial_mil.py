@@ -11,6 +11,106 @@ from .detection_windows import Rect
 from .training_input_bundle import TrainingInputBundle
 
 
+_INDEX_DTYPES = {
+    torch.int32,
+    torch.int64,
+}
+
+
+def _validate_instance_supervision(
+    logits: Tensor,
+    masks: Tensor,
+    instance_batch_indices: Tensor,
+    instance_class_indices: Tensor,
+    *,
+    masks_name: str,
+) -> None:
+    if not isinstance(logits, Tensor) or logits.ndim != 4:
+        raise ValueError("logits must have shape (B, C, H, W)")
+    if not torch.is_floating_point(logits):
+        raise ValueError("logits must be floating-point")
+    if not isinstance(masks, Tensor) or masks.ndim != 3:
+        raise ValueError(f"{masks_name} must have shape (N, H, W)")
+    if masks.dtype != torch.bool:
+        raise ValueError(f"{masks_name} must have boolean dtype")
+    if masks.device != logits.device:
+        raise ValueError(f"{masks_name} and logits must be on the same device")
+    if masks.shape[1:] != logits.shape[-2:]:
+        raise ValueError(f"{masks_name} spatial shape must match logits")
+
+    instance_count = masks.shape[0]
+    for name, indices, limit in (
+        ("batch", instance_batch_indices, logits.shape[0]),
+        ("class", instance_class_indices, logits.shape[1]),
+    ):
+        if not isinstance(indices, Tensor) or indices.ndim != 1:
+            raise ValueError(f"instance {name} indices must have shape (N,)")
+        if indices.shape[0] != instance_count:
+            raise ValueError(f"instance {name} indices length must match {masks_name}")
+        if indices.dtype not in _INDEX_DTYPES:
+            raise ValueError(f"instance {name} indices must be integer")
+        if indices.device != logits.device:
+            raise ValueError(
+                f"instance {name} indices and logits must be on the same device"
+            )
+        if instance_count and bool(torch.any(indices < 0).item()):
+            raise ValueError(f"instance {name} index must be non-negative")
+        if instance_count and bool(torch.any(indices >= limit).item()):
+            raise ValueError(f"instance {name} index out of range")
+
+    if instance_count and not bool(masks.flatten(start_dim=1).any(dim=1).all().item()):
+        raise ValueError(f"each {masks_name} entry must be non-empty")
+
+
+def per_instance_coverage_loss(
+    logits: Tensor,
+    instance_masks: Tensor,
+    instance_batch_indices: Tensor,
+    instance_class_indices: Tensor,
+) -> Tensor:
+    """Require a local response for every declared instance."""
+
+    _validate_instance_supervision(
+        logits,
+        instance_masks,
+        instance_batch_indices,
+        instance_class_indices,
+        masks_name="instance_masks",
+    )
+    if instance_masks.shape[0] == 0:
+        return logits.sum() * 0.0
+    selected = logits[instance_batch_indices, instance_class_indices]
+    masked = selected.masked_fill(~instance_masks, -torch.inf)
+    return F.softplus(-masked.amax(dim=(-2, -1))).mean()
+
+
+def negative_ring_suppression_loss(
+    logits: Tensor,
+    ring_masks: Tensor,
+    instance_batch_indices: Tensor,
+    instance_class_indices: Tensor,
+) -> Tensor:
+    """Suppress class response in caller-declared negative rings."""
+
+    _validate_instance_supervision(
+        logits,
+        ring_masks,
+        instance_batch_indices,
+        instance_class_indices,
+        masks_name="ring_masks",
+    )
+    if ring_masks.shape[0] == 0:
+        return logits.sum() * 0.0
+
+    selected = logits[instance_batch_indices, instance_class_indices]
+    ring_values = selected.masked_fill(~ring_masks, 0.0)
+    penalties = (
+        F.softplus(ring_values).mul(ring_masks).flatten(start_dim=1).sum(dim=1)
+    )
+    ring_counts = ring_masks.flatten(start_dim=1).sum(dim=1)
+    return (penalties / ring_counts.to(dtype=logits.dtype)).mean()
+
+
 def derive_train_positive_class_weights(bundle: TrainingInputBundle) -> Tensor:
     """Return capped inverse-positive-frequency weights from Training bags."""
 
@@ -248,7 +348,9 @@ __all__ = [
     "absent_class_hard_negative_loss",
     "dense_absent_class_loss",
     "derive_train_positive_class_weights",
+    "negative_ring_suppression_loss",
     "overlap_consistency_loss",
+    "per_instance_coverage_loss",
     "positive_spatial_lse_loss",
     "positive_spatial_mil_loss",
     "positive_spatial_topk_loss",

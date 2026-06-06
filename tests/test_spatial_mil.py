@@ -8,7 +8,9 @@ from wafer_defect_studio.spatial_mil import (
     absent_class_hard_negative_loss,
     dense_absent_class_loss,
     derive_train_positive_class_weights,
+    negative_ring_suppression_loss,
     overlap_consistency_loss,
+    per_instance_coverage_loss,
     positive_spatial_mil_loss,
     positive_spatial_topk_loss,
     same_image_grid_ranking_loss,
@@ -125,6 +127,124 @@ class GridContrastiveV6LossTest(unittest.TestCase):
             ),
             torch.tensor(0.0),
         )
+
+
+class InstanceAwareSpatialLossTest(unittest.TestCase):
+    def test_each_instance_requires_a_local_response(self) -> None:
+        masks = torch.zeros(2, 4, 4, dtype=torch.bool)
+        masks[0, 0, 0] = True
+        masks[1, 3, 3] = True
+        batch_indices = torch.zeros(2, dtype=torch.long)
+        class_indices = torch.zeros(2, dtype=torch.long)
+
+        one_covered = torch.full((1, 1, 4, 4), -4.0)
+        one_covered[0, 0, 0, 0] = 4.0
+        one_covered.requires_grad_()
+        one_loss = per_instance_coverage_loss(
+            one_covered, masks, batch_indices, class_indices
+        )
+        one_loss.backward()
+
+        both_covered = torch.full((1, 1, 4, 4), -4.0)
+        both_covered[0, 0, 0, 0] = 4.0
+        both_covered[0, 0, 3, 3] = 4.0
+        both_loss = per_instance_coverage_loss(
+            both_covered, masks, batch_indices, class_indices
+        )
+
+        self.assertGreater(one_loss.item(), both_loss.item())
+        self.assertLess(one_covered.grad[0, 0, 3, 3].item(), 0.0)
+
+    def test_negative_ring_penalizes_expansion_and_pushes_down(self) -> None:
+        ring_masks = torch.zeros(1, 4, 4, dtype=torch.bool)
+        ring_masks[0, 1, 2] = True
+        batch_indices = torch.zeros(1, dtype=torch.long)
+        class_indices = torch.zeros(1, dtype=torch.long)
+
+        high_ring = torch.full((1, 1, 4, 4), -5.0)
+        high_ring[0, 0, 1, 2] = 5.0
+        high_ring.requires_grad_()
+        high_loss = negative_ring_suppression_loss(
+            high_ring, ring_masks, batch_indices, class_indices
+        )
+        high_loss.backward()
+
+        low_ring = torch.full((1, 1, 4, 4), -5.0)
+        low_loss = negative_ring_suppression_loss(
+            low_ring, ring_masks, batch_indices, class_indices
+        )
+
+        self.assertGreater(high_loss.item(), low_loss.item())
+        self.assertGreater(high_ring.grad[0, 0, 1, 2].item(), 0.0)
+
+    def test_no_instances_return_connected_zero(self) -> None:
+        logits = torch.randn(1, 2, 4, 4, requires_grad=True)
+        masks = torch.zeros(0, 4, 4, dtype=torch.bool)
+        batch_indices = torch.zeros(0, dtype=torch.long)
+        class_indices = torch.zeros(0, dtype=torch.long)
+
+        loss = per_instance_coverage_loss(
+            logits, masks, batch_indices, class_indices
+        ) + negative_ring_suppression_loss(
+            logits, masks, batch_indices, class_indices
+        )
+        loss.backward()
+
+        self.assertEqual(0.0, loss.item())
+        self.assertTrue(torch.equal(logits.grad, torch.zeros_like(logits)))
+
+    def test_instance_supervision_rejects_invalid_shape_index_and_masks(self) -> None:
+        logits = torch.zeros(1, 1, 2, 2)
+        empty_indices = torch.zeros(0, dtype=torch.long)
+        with self.assertRaisesRegex(ValueError, "instance_masks.*shape"):
+            per_instance_coverage_loss(
+                logits,
+                torch.zeros(1, 2, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.long),
+                torch.zeros(1, dtype=torch.long),
+            )
+        with self.assertRaisesRegex(ValueError, "mask.*non-empty"):
+            per_instance_coverage_loss(
+                logits,
+                torch.zeros(1, 2, 2, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.long),
+                torch.zeros(1, dtype=torch.long),
+            )
+        with self.assertRaisesRegex(ValueError, "batch index"):
+            per_instance_coverage_loss(
+                logits,
+                torch.ones(1, 2, 2, dtype=torch.bool),
+                torch.ones(1, dtype=torch.long),
+                torch.zeros(1, dtype=torch.long),
+            )
+        with self.assertRaisesRegex(ValueError, "ring_masks.*non-empty"):
+            negative_ring_suppression_loss(
+                logits,
+                torch.zeros(1, 2, 2, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.long),
+                torch.zeros(1, dtype=torch.long),
+            )
+        with self.assertRaisesRegex(ValueError, "batch.*integer"):
+            per_instance_coverage_loss(
+                logits,
+                torch.ones(1, 2, 2, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.int16),
+                torch.zeros(1, dtype=torch.long),
+            )
+        with self.assertRaisesRegex(ValueError, "class index"):
+            negative_ring_suppression_loss(
+                logits,
+                torch.ones(1, 2, 2, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.long),
+                torch.ones(1, dtype=torch.long),
+            )
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            negative_ring_suppression_loss(
+                logits,
+                torch.ones(1, 2, 2),
+                empty_indices,
+                empty_indices,
+            )
 
 
 class AbsentClassHardNegativeLossTest(unittest.TestCase):
