@@ -8,6 +8,7 @@ from wafer_defect_studio.spatial_mil import (
     absent_class_hard_negative_loss,
     dense_absent_class_loss,
     derive_train_positive_class_weights,
+    far_negative_suppression_loss,
     negative_ring_suppression_loss,
     overlap_consistency_loss,
     per_instance_coverage_loss,
@@ -244,6 +245,94 @@ class InstanceAwareSpatialLossTest(unittest.TestCase):
                 torch.ones(1, 2, 2),
                 empty_indices,
                 empty_indices,
+            )
+
+    def test_far_negative_targets_only_hardest_declared_cells(self) -> None:
+        logits = torch.tensor(
+            [[[[3.0, 7.0, 1.0], [5.0, -2.0, 4.0]]]], requires_grad=True
+        )
+        far_negative_masks = torch.tensor(
+            [[[False, True, True], [True, False, False]]], dtype=torch.bool
+        )
+        batch_indices = torch.zeros(1, dtype=torch.long)
+        class_indices = torch.zeros(1, dtype=torch.long)
+
+        loss = far_negative_suppression_loss(
+            logits,
+            far_negative_masks,
+            batch_indices,
+            class_indices,
+            hardest_fraction=0.01,
+        )
+
+        torch.testing.assert_close(loss, F.softplus(torch.tensor(7.0)))
+        loss.backward()
+
+        self.assertGreater(logits.grad[0, 0, 0, 1].item(), 0.0)
+        self.assertTrue(torch.equal(
+            logits.grad[0, 0] * torch.tensor(
+                [[1.0, 0.0, 1.0], [1.0, 1.0, 1.0]]
+            ),
+            torch.zeros(2, 3),
+        ))
+        self.assertEqual(0.0, logits.grad[0, 0, 0, 0].item())
+        self.assertEqual(0.0, logits.grad[0, 0, 1, 1].item())
+
+    def test_far_negative_normal_grid_and_empty_rows_are_finite_and_connected(self) -> None:
+        normal_logits = torch.zeros(1, 1, 2, 2, requires_grad=True)
+        normal_mask = torch.ones(1, 2, 2, dtype=torch.bool)
+        normal_loss = far_negative_suppression_loss(
+            normal_logits,
+            normal_mask,
+            torch.zeros(1, dtype=torch.int32),
+            torch.zeros(1, dtype=torch.int64),
+        )
+        self.assertTrue(torch.isfinite(normal_loss).item())
+
+        empty_logits = torch.randn(1, 1, 2, 2, requires_grad=True)
+        empty_loss = far_negative_suppression_loss(
+            empty_logits,
+            torch.zeros(0, 2, 2, dtype=torch.bool),
+            torch.zeros(0, dtype=torch.long),
+            torch.zeros(0, dtype=torch.long),
+        )
+        empty_loss.backward()
+        self.assertEqual(0.0, empty_loss.item())
+        self.assertTrue(torch.equal(empty_logits.grad, torch.zeros_like(empty_logits)))
+
+    def test_far_negative_rejects_invalid_fraction_and_mask_contract(self) -> None:
+        logits = torch.zeros(1, 1, 2, 2)
+        mask = torch.ones(1, 2, 2, dtype=torch.bool)
+        indices = torch.zeros(1, dtype=torch.long)
+
+        for fraction in (True, 0.0, float("nan"), float("inf"), "0.5"):
+            with self.subTest(fraction=fraction), self.assertRaisesRegex(
+                ValueError, "hardest_fraction"
+            ):
+                far_negative_suppression_loss(
+                    logits, mask, indices, indices, hardest_fraction=fraction
+                )
+
+        with self.assertRaisesRegex(ValueError, "far_negative_masks.*shape"):
+            far_negative_suppression_loss(
+                logits,
+                torch.ones(1, 2, dtype=torch.bool),
+                indices,
+                indices,
+            )
+        with self.assertRaisesRegex(ValueError, "far_negative_masks.*boolean"):
+            far_negative_suppression_loss(
+                logits,
+                torch.ones(1, 2, 2),
+                indices,
+                indices,
+            )
+        with self.assertRaisesRegex(ValueError, "far_negative_masks.*non-empty"):
+            far_negative_suppression_loss(
+                logits,
+                torch.zeros(1, 2, 2, dtype=torch.bool),
+                indices,
+                indices,
             )
 
 

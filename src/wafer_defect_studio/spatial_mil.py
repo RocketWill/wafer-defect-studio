@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from math import ceil, isfinite, log
+from numbers import Real
 
 import torch
 import torch.nn.functional as F
@@ -109,6 +110,43 @@ def negative_ring_suppression_loss(
     )
     ring_counts = ring_masks.flatten(start_dim=1).sum(dim=1)
     return (penalties / ring_counts.to(dtype=logits.dtype)).mean()
+
+
+def far_negative_suppression_loss(
+    logits: Tensor,
+    far_negative_masks: Tensor,
+    batch_indices: Tensor,
+    class_indices: Tensor,
+    *,
+    hardest_fraction: float = 0.01,
+) -> Tensor:
+    """Suppress caller-declared far-negative response, weighting its hardest tail."""
+
+    if (
+        isinstance(hardest_fraction, bool)
+        or not isinstance(hardest_fraction, Real)
+        or not isfinite(hardest_fraction)
+        or not 0 < hardest_fraction <= 1
+    ):
+        raise ValueError("hardest_fraction must be finite numeric in the range (0, 1]")
+    _validate_instance_supervision(
+        logits,
+        far_negative_masks,
+        batch_indices,
+        class_indices,
+        masks_name="far_negative_masks",
+    )
+    if far_negative_masks.shape[0] == 0:
+        return logits.sum() * 0.0
+
+    selected = logits[batch_indices, class_indices]
+    row_losses = []
+    for row_logits, row_mask in zip(selected, far_negative_masks):
+        values = row_logits[row_mask]
+        count = max(1, ceil(values.numel() * hardest_fraction))
+        hardest = torch.topk(values, count, dim=0).values
+        row_losses.append(F.softplus(hardest).mean())
+    return torch.stack(row_losses).mean()
 
 
 def derive_train_positive_class_weights(bundle: TrainingInputBundle) -> Tensor:
@@ -348,6 +386,7 @@ __all__ = [
     "absent_class_hard_negative_loss",
     "dense_absent_class_loss",
     "derive_train_positive_class_weights",
+    "far_negative_suppression_loss",
     "negative_ring_suppression_loss",
     "overlap_consistency_loss",
     "per_instance_coverage_loss",
