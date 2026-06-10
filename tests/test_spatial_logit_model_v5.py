@@ -84,6 +84,24 @@ class SpatialLogitModelV5Test(unittest.TestCase):
                 )
             )
 
+            for policy in (
+                "frozen_running_statistics_affine_trainable",
+                "train_running_statistics_affine_trainable",
+            ):
+                checkpoint["batch_norm_policy"] = policy
+                torch.save(checkpoint, path)
+                self.assertEqual(
+                    validate_project_checkpoint(path)["batch_norm_policy"],
+                    policy,
+                )
+            checkpoint["batch_norm_policy"] = "invalid"
+            torch.save(checkpoint, path)
+            with self.assertRaisesRegex(TrainingRunError, "batch_norm_policy"):
+                validate_project_checkpoint(path)
+            checkpoint.pop("batch_norm_policy")
+            torch.save(checkpoint, path)
+            self.assertNotIn("batch_norm_policy", validate_project_checkpoint(path))
+
             checkpoint["checkpoint_selection"] = {
                 "source": "validation",
                 "metric": "validation_spatial_metrics",

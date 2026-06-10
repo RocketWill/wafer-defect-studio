@@ -30,6 +30,7 @@ from .model_registry import (
     create_resnet18_spatial_logits_v5,
     max_pool_patch_logits,
     resolve_device,
+    set_spatial_transfer_training_mode,
 )
 from .spatial_mil import (
     absent_class_hard_negative_loss,
@@ -321,6 +322,10 @@ def run_worker(
                 device=device,
             )
         )
+        spatial_v5_transfer = (
+            config.training_policy == "spatial_mil_v5"
+            and config.weights_policy == "imagenet"
+        )
         if bundle is None:
             _freeze_backbone(model)
             optimizer_parameters = model.backbone.fc.parameters()
@@ -390,7 +395,10 @@ def run_worker(
                         if inputs.ndim == 5
                         else inputs.shape[0]
                     )
-                    model.train() if effective_batch_size > 1 else model.eval()
+                    if spatial_v5_transfer:
+                        set_spatial_transfer_training_mode(model)
+                    else:
+                        model.train() if effective_batch_size > 1 else model.eval()
                     inputs = inputs.to(device)
                     targets = targets.to(device)
                 if config.training_policy in {"spatial_mil_v4", "spatial_mil_v5"}:
@@ -663,7 +671,12 @@ def _evaluate_v5_validation_loss(
                 + 0.10 * overlap
             )
             values.append(float(loss.cpu().item()))
-    model.train(was_training)
+    if not was_training:
+        model.eval()
+    elif config.training_policy == "spatial_mil_v5" and config.weights_policy == "imagenet":
+        set_spatial_transfer_training_mode(model)
+    else:
+        model.train()
     if not values:
         raise RuntimeError("spatial_mil_v5 requires validation members")
     return sum(values) / len(values)
@@ -735,6 +748,11 @@ def _write_staged_artifacts(
                 "patch_size": config.patch_size,
                 "patch_stride": config.patch_stride,
                 "training_policy": "spatial_mil_v5",
+                "batch_norm_policy": (
+                    "frozen_running_statistics_affine_trainable"
+                    if config.weights_policy == "imagenet"
+                    else "train_running_statistics_affine_trainable"
+                ),
                 "loss_policy": {
                     "positive_pooling": "normalized_logsumexp",
                     "negative_dense_hardest_fraction": 0.01,

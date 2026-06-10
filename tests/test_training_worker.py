@@ -13,7 +13,10 @@ import torch
 
 from wafer_defect_studio.dataset_snapshot import SnapshotSample
 from wafer_defect_studio.detection_windows import Rect
-from wafer_defect_studio.model_registry import create_resnet18, create_resnet18_spatial_logits
+from wafer_defect_studio.model_registry import (
+    create_resnet18,
+    create_resnet18_spatial_logits,
+)
 from wafer_defect_studio.normalization import NormalizationBounds
 from wafer_defect_studio.spatial_mil import (
     absent_class_hard_negative_loss,
@@ -29,6 +32,7 @@ from wafer_defect_studio.training_protocol import (
 )
 from wafer_defect_studio.training_run import validate_project_checkpoint, validate_staged_artifacts
 from wafer_defect_studio.training_worker import (
+    _write_staged_artifacts,
     create_training_data_loader,
     run_worker,
     start_training_worker,
@@ -45,6 +49,52 @@ from wafer_defect_studio.training_patch_dataset import (
 
 
 class TrainingWorkerTest(unittest.TestCase):
+    def test_v5_checkpoint_records_batch_norm_policy_for_weight_sources(self):
+        bundle = TrainingInputBundle(
+            "snapshot-1",
+            "split-1",
+            ("scratch",),
+            (NormalizationBounds("uint8", 0, 255, 0.0, 255.0, 1.0, 99.0),),
+            (),
+            (),
+            2,
+            (TrainingPatchBag("bag", "wafer", 0, 0, (Rect(0, 0, 32, 32),), ("scratch",)),),
+        )
+        model = torch.nn.Conv2d(1, 1, kernel_size=1)
+        for weights_policy, expected in (
+            ("imagenet", "frozen_running_statistics_affine_trainable"),
+            ("none", "train_running_statistics_affine_trainable"),
+        ):
+            config = TrainingConfig(
+                snapshot_id="snapshot-1",
+                split_id="split-1",
+                class_count=1,
+                epochs=30,
+                batch_size=4,
+                learning_rate=0.0003,
+                weights_policy=weights_policy,
+                patch_size=32,
+                patch_stride=32,
+                training_policy="spatial_mil_v5",
+            )
+            with TemporaryDirectory() as temporary_directory:
+                staging = Path(temporary_directory)
+                _write_staged_artifacts(
+                    staging,
+                    model,
+                    config,
+                    torch.device("cpu"),
+                    0.25,
+                    1,
+                    bundle=bundle,
+                    base_epochs=30,
+                    refinement_epochs=0,
+                    selected_epoch=1,
+                    selected_validation_loss=0.25,
+                )
+                checkpoint = validate_project_checkpoint(staging / "model.pt")
+                self.assertEqual(checkpoint["batch_norm_policy"], expected)
+
     def test_v4_worker_rejects_unknown_priority_normal_bag_id_with_train_context(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

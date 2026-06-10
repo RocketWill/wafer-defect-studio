@@ -55,6 +55,9 @@ _CHECKPOINT_FORMAT_V2 = "wafer_defect_studio.resnet18.v2"
 _CHECKPOINT_FORMAT_V3 = "wafer_defect_studio.resnet18.v3"
 _CHECKPOINT_FORMAT_V4 = "wafer_defect_studio.resnet18.v4"
 _CHECKPOINT_FORMAT_V5 = "wafer_defect_studio.resnet18.v5"
+_BATCH_NORM_POLICY_FROZEN = "frozen_running_statistics_affine_trainable"
+_BATCH_NORM_POLICY_TRAIN = "train_running_statistics_affine_trainable"
+_BATCH_NORM_POLICIES = frozenset({_BATCH_NORM_POLICY_FROZEN, _BATCH_NORM_POLICY_TRAIN})
 _IMMUTABLE_COLUMNS = (
     "run_id",
     "created_at",
@@ -692,6 +695,12 @@ def validate_project_checkpoint(
             raise TrainingRunError(
                 "resnet18.v5 checkpoint training_policy must be spatial_mil_v5"
             )
+        batch_norm_policy = value.get("batch_norm_policy")
+        if "batch_norm_policy" in value and (
+            not isinstance(batch_norm_policy, str)
+            or batch_norm_policy not in _BATCH_NORM_POLICIES
+        ):
+            raise TrainingRunError("resnet18.v5 checkpoint batch_norm_policy is invalid")
         expected_loss_policy = {
             "positive_pooling": "normalized_logsumexp",
             "negative_dense_hardest_fraction": 0.01,

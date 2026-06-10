@@ -9,6 +9,7 @@ from wafer_defect_studio.model_registry import (
     WeightsPolicy,
     create_resnet18,
     create_resnet18_spatial_logits,
+    set_spatial_transfer_training_mode,
     load_project_checkpoint,
     resnet18_local_probabilities,
     resolve_device,
@@ -17,6 +18,33 @@ from wafer_defect_studio.model_registry import (
 
 
 class ModelRegistryTest(unittest.TestCase):
+    def test_spatial_transfer_training_mode_freezes_batchnorm_running_stats(self):
+        model = torch.nn.Sequential(
+            torch.nn.Conv2d(1, 2, kernel_size=1),
+            torch.nn.BatchNorm2d(2),
+            torch.nn.ReLU(),
+        )
+        model.eval()
+        batch_norm = model[1]
+        running_mean = batch_norm.running_mean.detach().clone()
+        running_var = batch_norm.running_var.detach().clone()
+
+        set_spatial_transfer_training_mode(model)
+
+        self.assertTrue(model.training)
+        self.assertTrue(model[0].training)
+        self.assertFalse(batch_norm.training)
+        self.assertTrue(batch_norm.weight.requires_grad)
+        self.assertTrue(batch_norm.bias.requires_grad)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        optimizer.zero_grad()
+        model(torch.ones((2, 1, 4, 4))).sum().backward()
+        optimizer.step()
+        self.assertIsNotNone(batch_norm.weight.grad)
+        self.assertIsNotNone(batch_norm.bias.grad)
+        self.assertTrue(torch.equal(batch_norm.running_mean, running_mean))
+        self.assertTrue(torch.equal(batch_norm.running_var, running_var))
+
     def test_v4_checkpoint_loads_strict_spatial_model_and_preserves_absolute_probabilities(self):
         source = create_resnet18_spatial_logits(2, device="cpu")
         with TemporaryDirectory() as temporary_directory:

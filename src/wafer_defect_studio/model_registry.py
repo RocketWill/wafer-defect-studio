@@ -79,6 +79,17 @@ def max_pool_patch_logits(patch_logits: Tensor) -> Tensor:
     return patch_logits.max(dim=1).values
 
 
+def set_spatial_transfer_training_mode(model: nn.Module) -> None:
+    """Train non-BatchNorm modules while keeping BatchNorm2d statistics fixed."""
+
+    if not isinstance(model, nn.Module):
+        raise ModelRegistryError("model must be a torch.nn.Module")
+    model.train()
+    for module in model.modules():
+        if isinstance(module, nn.BatchNorm2d):
+            module.eval()
+
+
 class ResNet18Classifier(nn.Module):
     """Torchvision ResNet18 with a multi-label logits head."""
 
@@ -441,5 +452,6 @@ __all__ = [
     "max_pool_patch_logits",
     "resnet18_local_probabilities",
     "resolve_device",
+    "set_spatial_transfer_training_mode",
     "spatial_logits_to_probabilities",
 ]
