@@ -34,6 +34,9 @@ class Ticket37SparseObjectiveContractTest(unittest.TestCase):
         self.assertEqual(contract["recipe"], {
             "architecture": "resnet18_spatial_logits_v5",
             "weights_policy": "imagenet",
+            "weights_id": "ResNet18_Weights.IMAGENET1K_V1",
+            "weights_url": "https://download.pytorch.org/models/resnet18-f37072fd.pth",
+            "weights_sha256": "f37072fd47e89c5e827621c5baffa7500819f7896bbacec160b1a16c560e07ec",
             "batch_norm_policy": "frozen_running_stats",
             "epochs": 30,
             "optimizer": "adamw",
@@ -46,6 +49,12 @@ class Ticket37SparseObjectiveContractTest(unittest.TestCase):
             "threshold": 0.5,
             "tolerance_pixels": 8,
             "calibration": "forbidden",
+        })
+        self.assertEqual(contract["deterministic_policy"], {
+            "cublas_workspace_config": ":4096:8",
+            "torch_deterministic_algorithms": True,
+            "cudnn_deterministic": True,
+            "cudnn_benchmark": False,
         })
         self.assertEqual(contract["objective"], {
             "loss": "sparse_instance_localization_loss",
@@ -73,7 +82,7 @@ class Ticket37SparseObjectiveContractTest(unittest.TestCase):
             "unmatched_truth_max": 0,
             "unmatched_proposal_max": 0,
             "cross_component_merge_max": 0,
-            "normal_grid_leak_max": 0,
+            "normal_grid_leaks_max": 0,
             "asserted_grid_occupancy_p95_max": 0.25,
         })
         self.assertEqual(contract["candidate_artifacts"]["root"], CANDIDATE_ARTIFACT_ROOT)

@@ -29,6 +29,9 @@ CASE_IDS = (
 )
 ARCHITECTURE = "resnet18_spatial_logits_v5"
 WEIGHTS_POLICY = "imagenet"
+WEIGHTS_ID = "ResNet18_Weights.IMAGENET1K_V1"
+WEIGHTS_URL = "https://download.pytorch.org/models/resnet18-f37072fd.pth"
+WEIGHTS_SHA256 = "f37072fd47e89c5e827621c5baffa7500819f7896bbacec160b1a16c560e07ec"
 BATCH_NORM_POLICY = "frozen_running_stats"
 EPOCHS = 30
 LEARNING_RATE = 0.0003
@@ -41,6 +44,12 @@ THRESHOLD = 0.5
 TOLERANCE_PIXELS = 8
 CALIBRATION = "forbidden"
 HARDEST_FRACTION = 0.01
+DETERMINISTIC_POLICY = {
+    "cublas_workspace_config": ":4096:8",
+    "torch_deterministic_algorithms": True,
+    "cudnn_deterministic": True,
+    "cudnn_benchmark": False,
+}
 CANDIDATE_ARTIFACT_ROOT = "artifacts/ticket37-sparse-objective-candidate"
 ARTIFACT_ROLES = (
     "checkpoint",
@@ -73,6 +82,62 @@ SOURCE_DEPENDENCIES = (
         "src/wafer_defect_studio/model_registry.py",
         "dec93cb37c15f1bb183075916e785102341b23b43bef39032d4f4ca5f89f473b",
     ),
+    (
+        "docs/demo/ticket37_sparse_objective_candidate.py",
+        "cf05072e0262955b9881636729b3cbffcc3c7f6e597737ad4da026c37f01ab88",
+    ),
+    (
+        "docs/demo/ticket35_development_corpus.py",
+        "fc89a9bc8c83c69aaf4bb4fbeefcb6162e6ee71d55275f87eace62046d65958c",
+    ),
+    (
+        "docs/demo/ticket31_contract.py",
+        "a6afc4ceb4a5863c0aebe768e3a3699422b0920da9a2b62f9dd0c3719eb94d99",
+    ),
+    (
+        "docs/demo/defect_oracle.py",
+        "7123f1cae9fc126172c97623f28d15c8f4f62a8f36721b0132e2920dacb1f2a6",
+    ),
+    (
+        "docs/demo/ticket30_evidence_corpus.py",
+        "1b9c5c41b9ddfa6a876134bb2fd9a0dcc9b19790cf4ba3c404adc7cea019b5de",
+    ),
+    (
+        "docs/demo/ticket36_instance_matching.py",
+        "0e39f99343e8b70ac0af1f540c96fe5d7c35e5bcd0b1c899eb69300c7644f0a9",
+    ),
+    (
+        "docs/demo/wafer_quality_evidence.py",
+        "bdce6078f5919e407ab198c35a6dd373aaba95a08a9c12f94251b768ec296229",
+    ),
+    (
+        "src/wafer_defect_studio/cam_detection.py",
+        "e5147804462ca28023c46f47865fffbf81055a09147361b89e54bbabecfc7964",
+    ),
+    (
+        "src/wafer_defect_studio/confidence_stitching.py",
+        "b2745a3d40931dbe8bb51b985ac74fe5e9f4ae1befb75395134b814f50b6befe",
+    ),
+    (
+        "src/wafer_defect_studio/detection_windows.py",
+        "4a1d3b66b4c67625ea133329ff16147af9002ae11e9beefeaf7093c05b5b20df",
+    ),
+    (
+        "src/wafer_defect_studio/grid_geometry.py",
+        "93532ef2e590fb1a24b940745893bb055456c4d1670bb200b4f2f862589ea8bf",
+    ),
+    (
+        "src/wafer_defect_studio/normalization.py",
+        "41664b71bf9ef9b15c195d05e73ffa0ad80e9d98fd84f5f3d364e5cc9700f721",
+    ),
+    (
+        "src/wafer_defect_studio/training_dataset.py",
+        "fbf1410d99dde94a5a640e66c119d88de3828f6ef73ee7808e6a03daf9ee743a",
+    ),
+    (
+        "src/wafer_defect_studio/training_protocol.py",
+        "762cb345aca3fcaec3da13e66eef8fb900b51e05a17144b3e8cabd756f8d95e7",
+    ),
 )
 _FORBIDDEN_PATH_TOKENS = (
     "ticket30",
@@ -103,6 +168,9 @@ def build_ticket37_sparse_objective_contract() -> dict[str, object]:
         "recipe": {
             "architecture": ARCHITECTURE,
             "weights_policy": WEIGHTS_POLICY,
+            "weights_id": WEIGHTS_ID,
+            "weights_url": WEIGHTS_URL,
+            "weights_sha256": WEIGHTS_SHA256,
             "batch_norm_policy": BATCH_NORM_POLICY,
             "epochs": EPOCHS,
             "optimizer": "adamw",
@@ -143,7 +211,7 @@ def build_ticket37_sparse_objective_contract() -> dict[str, object]:
                 "unmatched_truth_max": 0,
                 "unmatched_proposal_max": 0,
                 "cross_component_merge_max": 0,
-                "normal_grid_leak_max": 0,
+                "normal_grid_leaks_max": 0,
                 "asserted_grid_occupancy_p95_max": 0.25,
             },
             "remote_response": {
@@ -151,6 +219,7 @@ def build_ticket37_sparse_objective_contract() -> dict[str, object]:
                 "claim": "sparse_tolerance_not_segmentation_mask",
             },
         },
+        "deterministic_policy": dict(DETERMINISTIC_POLICY),
         "candidate_artifacts": {
             "root": CANDIDATE_ARTIFACT_ROOT,
             "hash_policy": HASH_POLICY,
@@ -363,6 +432,10 @@ __all__ = [
     "SCHEMA",
     "SOURCE_DEPENDENCIES",
     "TOLERANCE_PIXELS",
+    "WEIGHTS_ID",
+    "WEIGHTS_SHA256",
+    "WEIGHTS_URL",
+    "DETERMINISTIC_POLICY",
     "build_ticket37_sparse_objective_contract",
     "canonical_contract_json",
     "canonical_ticket37_sparse_objective_contract_json",
