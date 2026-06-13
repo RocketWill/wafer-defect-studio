@@ -149,6 +149,43 @@ def far_negative_suppression_loss(
     return torch.stack(row_losses).mean()
 
 
+def sparse_instance_localization_loss(
+    logits: Tensor,
+    instance_masks: Tensor,
+    instance_batch_indices: Tensor,
+    instance_class_indices: Tensor,
+    far_negative_masks: Tensor,
+    far_batch_indices: Tensor,
+    far_class_indices: Tensor,
+    *,
+    hardest_fraction: float = 0.01,
+) -> Tensor:
+    """Combine explicit instance coverage with local and global far suppression."""
+
+    coverage = per_instance_coverage_loss(
+        logits,
+        instance_masks,
+        instance_batch_indices,
+        instance_class_indices,
+    )
+    far = far_negative_suppression_loss(
+        logits,
+        far_negative_masks,
+        far_batch_indices,
+        far_class_indices,
+        hardest_fraction=hardest_fraction,
+    )
+    local_rows = ~far_negative_masks.flatten(start_dim=1).all(dim=1)
+    local_far = far_negative_suppression_loss(
+        logits,
+        far_negative_masks[local_rows],
+        far_batch_indices[local_rows],
+        far_class_indices[local_rows],
+        hardest_fraction=1.0,
+    )
+    return coverage + far + local_far
+
+
 def derive_train_positive_class_weights(bundle: TrainingInputBundle) -> Tensor:
     """Return capped inverse-positive-frequency weights from Training bags."""
 
@@ -395,4 +432,5 @@ __all__ = [
     "positive_spatial_topk_loss",
     "present_sparse_budget_loss",
     "same_image_grid_ranking_loss",
+    "sparse_instance_localization_loss",
 ]

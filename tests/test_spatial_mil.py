@@ -15,6 +15,7 @@ from wafer_defect_studio.spatial_mil import (
     positive_spatial_mil_loss,
     positive_spatial_topk_loss,
     same_image_grid_ranking_loss,
+    sparse_instance_localization_loss,
 )
 from wafer_defect_studio.training_input_bundle import (
     TrainingBundleSource,
@@ -131,6 +132,92 @@ class GridContrastiveV6LossTest(unittest.TestCase):
 
 
 class InstanceAwareSpatialLossTest(unittest.TestCase):
+    def test_sparse_instance_localization_combines_core_and_local_far_gradients(self) -> None:
+        logits = torch.tensor(
+            [[[
+                [-2.0, -2.0, -2.0],
+                [-2.0, -2.0, -2.0],
+            ], [
+                [-3.0, -2.0, -1.0],
+                [-4.0, -5.0, -6.0],
+            ]]],
+            requires_grad=True,
+        )
+        instance_masks = torch.zeros(1, 2, 3, dtype=torch.bool)
+        instance_masks[0, 0, 0] = True
+        far_masks = torch.ones(2, 2, 3, dtype=torch.bool)
+        far_masks[0, 0, 0] = False
+        far_masks[0, 0, 1] = False
+        instance_batch = torch.zeros(1, dtype=torch.long)
+        instance_class = torch.zeros(1, dtype=torch.long)
+        far_batch = torch.zeros(2, dtype=torch.long)
+        far_class = torch.tensor([0, 1], dtype=torch.long)
+
+        loss = sparse_instance_localization_loss(
+            logits,
+            instance_masks,
+            instance_batch,
+            instance_class,
+            far_masks,
+            far_batch,
+            far_class,
+        )
+        loss.backward()
+
+        self.assertLess(logits.grad[0, 0, 0, 0].item(), 0.0)
+        self.assertEqual(logits.grad[0, 0, 0, 1].item(), 0.0)
+        for row, column in ((0, 2), (1, 0), (1, 1), (1, 2)):
+            self.assertGreater(logits.grad[0, 0, row, column].item(), 0.0)
+        self.assertGreater(logits.grad[0, 1, 0, 2].item(), 0.0)
+        self.assertTrue(torch.equal(
+            logits.grad[0, 1, :, :2],
+            torch.zeros_like(logits.grad[0, 1, :, :2]),
+        ))
+
+    def test_sparse_instance_localization_without_local_rows_is_connected(self) -> None:
+        logits = torch.tensor(
+            [[[[1.0, 4.0, 2.0], [3.0, 0.0, -1.0]]]],
+            requires_grad=True,
+        )
+        empty = torch.zeros(0, 2, 3, dtype=torch.bool)
+        empty_indices = torch.zeros(0, dtype=torch.long)
+        far_masks = torch.ones(1, 2, 3, dtype=torch.bool)
+
+        loss = sparse_instance_localization_loss(
+            logits,
+            empty,
+            empty_indices,
+            empty_indices,
+            far_masks,
+            torch.zeros(1, dtype=torch.long),
+            torch.zeros(1, dtype=torch.long),
+        )
+
+        self.assertTrue(torch.isfinite(loss).item())
+        loss.backward()
+        self.assertGreater(logits.grad[0, 0, 0, 1].item(), 0.0)
+        inactive = torch.ones_like(logits.grad, dtype=torch.bool)
+        inactive[0, 0, 0, 1] = False
+        self.assertTrue(torch.equal(
+            logits.grad.masked_select(inactive),
+            torch.zeros_like(logits.grad.masked_select(inactive)),
+        ))
+
+    def test_sparse_instance_localization_preserves_mask_validation(self) -> None:
+        logits = torch.zeros(1, 1, 2, 2)
+        instance_masks = torch.ones(1, 2, 2, dtype=torch.bool)
+        indices = torch.zeros(1, dtype=torch.long)
+        with self.assertRaisesRegex(ValueError, "far_negative_masks.*shape"):
+            sparse_instance_localization_loss(
+                logits,
+                instance_masks,
+                indices,
+                indices,
+                torch.ones(1, 2, dtype=torch.bool),
+                indices,
+                indices,
+            )
+
     def test_each_instance_requires_a_local_response(self) -> None:
         masks = torch.zeros(2, 4, 4, dtype=torch.bool)
         masks[0, 0, 0] = True
