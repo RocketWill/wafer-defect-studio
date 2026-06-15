@@ -85,6 +85,39 @@ def per_instance_coverage_loss(
     return F.softplus(-masked.amax(dim=(-2, -1))).mean()
 
 
+def core_union_coverage_loss(
+    logits: Tensor,
+    instance_masks: Tensor,
+    instance_batch_indices: Tensor,
+    instance_class_indices: Tensor,
+) -> Tensor:
+    """Require a response at every unique core cell for each batch/class row."""
+
+    _validate_instance_supervision(
+        logits,
+        instance_masks,
+        instance_batch_indices,
+        instance_class_indices,
+        masks_name="instance_masks",
+    )
+    if instance_masks.shape[0] == 0:
+        return logits.sum() * 0.0
+
+    groups = torch.unique(
+        torch.stack((instance_batch_indices, instance_class_indices), dim=1),
+        dim=0,
+    )
+    row_losses = []
+    for batch_index, class_index in groups:
+        group_rows = (instance_batch_indices == batch_index) & (
+            instance_class_indices == class_index
+        )
+        union_mask = instance_masks[group_rows].any(dim=0)
+        row_logits = logits[batch_index, class_index]
+        row_losses.append(F.softplus(-row_logits[union_mask]).mean())
+    return torch.stack(row_losses).mean()
+
+
 def negative_ring_suppression_loss(
     logits: Tensor,
     ring_masks: Tensor,
@@ -421,6 +454,7 @@ def _flatten_spatial_logits(logits: Tensor) -> Tensor:
 
 __all__ = [
     "absent_class_hard_negative_loss",
+    "core_union_coverage_loss",
     "dense_absent_class_loss",
     "derive_train_positive_class_weights",
     "far_negative_suppression_loss",

@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from wafer_defect_studio.detection_windows import Rect
 from wafer_defect_studio.spatial_mil import (
     absent_class_hard_negative_loss,
+    core_union_coverage_loss,
     dense_absent_class_loss,
     derive_train_positive_class_weights,
     far_negative_suppression_loss,
@@ -242,6 +243,95 @@ class InstanceAwareSpatialLossTest(unittest.TestCase):
 
         self.assertGreater(one_loss.item(), both_loss.item())
         self.assertLess(one_covered.grad[0, 0, 3, 3].item(), 0.0)
+
+    def test_core_union_deduplicates_duplicate_masks_and_gradients(self) -> None:
+        masks = torch.zeros(1, 2, 3, dtype=torch.bool)
+        masks[0, 0, 0] = True
+        masks[0, 1, 2] = True
+        indices = torch.zeros(1, dtype=torch.long)
+
+        one_logits = torch.full((1, 1, 2, 3), -2.0, requires_grad=True)
+        one_loss = core_union_coverage_loss(one_logits, masks, indices, indices)
+        one_loss.backward()
+
+        duplicate_logits = one_logits.detach().clone().requires_grad_()
+        duplicate_loss = core_union_coverage_loss(
+            duplicate_logits,
+            masks.repeat(2, 1, 1),
+            torch.zeros(2, dtype=torch.long),
+            torch.zeros(2, dtype=torch.long),
+        )
+        duplicate_loss.backward()
+
+        torch.testing.assert_close(duplicate_loss, one_loss)
+        torch.testing.assert_close(duplicate_logits.grad, one_logits.grad)
+
+    def test_core_union_requires_response_at_every_unique_core_cell(self) -> None:
+        logits = torch.tensor([[[[5.0, -2.0]]]], requires_grad=True)
+        mask = torch.tensor([[[True, True]]])
+
+        loss = core_union_coverage_loss(
+            logits,
+            mask,
+            torch.zeros(1, dtype=torch.long),
+            torch.zeros(1, dtype=torch.long),
+        )
+        torch.testing.assert_close(
+            loss,
+            (F.softplus(torch.tensor(-5.0)) + F.softplus(torch.tensor(2.0))) / 2,
+        )
+        loss.backward()
+
+        self.assertLess(logits.grad[0, 0, 0, 0].item(), 0.0)
+        self.assertLess(logits.grad[0, 0, 0, 1].item(), 0.0)
+
+    def test_core_union_counts_disjoint_particle_centers_once(self) -> None:
+        logits = torch.tensor([[[[1.0, -4.0], [-3.0, 2.0]]]], requires_grad=True)
+        masks = torch.zeros(2, 2, 2, dtype=torch.bool)
+        masks[0, 0, 0] = True
+        masks[1, 1, 1] = True
+        indices = torch.zeros(2, dtype=torch.long)
+
+        loss = core_union_coverage_loss(logits, masks, indices, indices)
+        torch.testing.assert_close(
+            loss,
+            (F.softplus(torch.tensor(-1.0)) + F.softplus(torch.tensor(-2.0))) / 2,
+        )
+        loss.backward()
+
+        self.assertLess(logits.grad[0, 0, 0, 0].item(), 0.0)
+        self.assertLess(logits.grad[0, 0, 1, 1].item(), 0.0)
+
+    def test_core_union_empty_supervision_is_connected_zero(self) -> None:
+        logits = torch.randn(1, 2, 2, 2, requires_grad=True)
+        empty = torch.zeros(0, 2, 2, dtype=torch.bool)
+        empty_indices = torch.zeros(0, dtype=torch.long)
+
+        loss = core_union_coverage_loss(logits, empty, empty_indices, empty_indices)
+
+        self.assertEqual(0.0, loss.item())
+        self.assertTrue(torch.isfinite(loss).item())
+        loss.backward()
+        self.assertTrue(torch.equal(logits.grad, torch.zeros_like(logits)))
+
+    def test_core_union_rejects_invalid_masks(self) -> None:
+        logits = torch.zeros(1, 1, 2, 2)
+        indices = torch.zeros(1, dtype=torch.long)
+
+        with self.assertRaisesRegex(ValueError, "instance_masks.*shape"):
+            core_union_coverage_loss(
+                logits,
+                torch.ones(1, 2, dtype=torch.bool),
+                indices,
+                indices,
+            )
+        with self.assertRaisesRegex(ValueError, "mask.*non-empty"):
+            core_union_coverage_loss(
+                logits,
+                torch.zeros(1, 2, 2, dtype=torch.bool),
+                indices,
+                indices,
+            )
 
     def test_negative_ring_penalizes_expansion_and_pushes_down(self) -> None:
         ring_masks = torch.zeros(1, 4, 4, dtype=torch.bool)
