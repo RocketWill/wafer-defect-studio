@@ -139,6 +139,10 @@ SOURCE_DEPENDENCIES = (
         "762cb345aca3fcaec3da13e66eef8fb900b51e05a17144b3e8cabd756f8d95e7",
     ),
     (
+        "docs/demo/ticket38_core_union_gate.py",
+        "5690e1d426b30a6fff3fe85fbe90b15f595171cd4318c6022e300322844f9543",
+    ),
+    (
         "docs/demo/ticket38_core_union_probe.py",
         "9633c8c241cd8f41efbeec326a6e3d58c166e12140a4b0747b0b822c74c1fe07",
     ),
