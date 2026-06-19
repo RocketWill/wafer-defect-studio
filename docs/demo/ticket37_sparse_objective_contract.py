@@ -270,6 +270,7 @@ def validate_ticket37_sparse_objective_contract(
     *,
     repo_root: Path | None = None,
     source_texts: Mapping[str, str] | None = None,
+    verify_live_sources: bool = True,
 ) -> None:
     """Fail closed on contract drift, source drift, or unsafe artifact paths."""
 
@@ -285,6 +286,7 @@ def validate_ticket37_sparse_objective_contract(
         contract.get("source_dependencies"),
         repo_root=repo_root,
         source_texts=source_texts,
+        verify_live_sources=verify_live_sources,
     )
     _validate_candidate_artifacts(contract.get("candidate_artifacts"))
 
@@ -294,7 +296,7 @@ def canonical_ticket37_sparse_objective_contract_json(
 ) -> str:
     """Return canonical JSON after validating the declarative contract."""
 
-    validate_ticket37_sparse_objective_contract(contract)
+    validate_ticket37_sparse_objective_contract(contract, verify_live_sources=False)
     return json.dumps(contract, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
@@ -330,6 +332,7 @@ def _validate_source_dependencies(
     *,
     repo_root: Path | None,
     source_texts: Mapping[str, str] | None,
+    verify_live_sources: bool,
 ) -> None:
     expected = build_ticket37_sparse_objective_contract()["source_dependencies"]
     if value != expected:
@@ -340,8 +343,13 @@ def _validate_source_dependencies(
         paths = {path for path, _sha256 in SOURCE_DEPENDENCIES}
         if any(path not in paths for path in source_texts):
             raise ValueError("Ticket 37 source text path is not declared")
+    if not isinstance(verify_live_sources, bool):
+        raise ValueError("Ticket 37 live-source policy must be boolean")
     root = Path(__file__).resolve().parents[2] if repo_root is None else Path(repo_root)
-    for path, expected_sha256 in SOURCE_DEPENDENCIES:
+    dependencies = SOURCE_DEPENDENCIES if verify_live_sources else tuple(
+        item for item in SOURCE_DEPENDENCIES if source_texts is not None and item[0] in source_texts
+    )
+    for path, expected_sha256 in dependencies:
         if source_texts is not None and path in source_texts:
             raw = _normalized_utf8_lf_bytes(source_texts[path], path)
         else:

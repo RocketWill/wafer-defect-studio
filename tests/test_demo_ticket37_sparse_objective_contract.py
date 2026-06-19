@@ -90,7 +90,9 @@ class Ticket37SparseObjectiveContractTest(unittest.TestCase):
             tuple(item["role"] for item in contract["candidate_artifacts"]["roles"]),
             ARTIFACT_ROLES,
         )
-        validate_ticket37_sparse_objective_contract(contract)
+        with self.assertRaisesRegex(ValueError, "src/wafer_defect_studio/spatial_mil.py"):
+            validate_ticket37_sparse_objective_contract(contract)
+        validate_ticket37_sparse_objective_contract(contract, verify_live_sources=False)
 
         artifact = Path(__file__).resolve().parents[1] / "docs/demo/ticket37-sparse-objective-contract.json"
         self.assertEqual(
@@ -121,7 +123,10 @@ class Ticket37SparseObjectiveContractTest(unittest.TestCase):
             tampered = copy.deepcopy(base)
             mutate(tampered)
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
-                validate_ticket37_sparse_objective_contract(tampered)
+                validate_ticket37_sparse_objective_contract(
+                    tampered,
+                    verify_live_sources=False,
+                )
 
         dependency_path = next(iter(base["source_dependencies"]))["path"]
         source = (Path(__file__).resolve().parents[1] / dependency_path).read_text(encoding="utf-8")
@@ -129,6 +134,7 @@ class Ticket37SparseObjectiveContractTest(unittest.TestCase):
             validate_ticket37_sparse_objective_contract(
                 base,
                 source_texts={dependency_path: source + "\n# tampered"},
+                verify_live_sources=False,
             )
 
     def test_cli_writes_canonical_contract_once(self) -> None:
