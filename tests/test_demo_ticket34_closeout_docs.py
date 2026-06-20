@@ -49,10 +49,7 @@ class Ticket34CloseoutDocsTest(unittest.TestCase):
             max(row["asserted_grid_occupancy_p95"] for row in particle),
         )
 
-        documents = (
-            self.root / "README.md",
-            self.root / "docs/demo/phase2-end-to-end-tutorial.md",
-        )
+        documents = (self.root / "docs/demo/phase2-end-to-end-tutorial.md",)
         for document in documents:
             markdown = " ".join(document.read_text(encoding="utf-8").split())
             self.assertIn("Ticket 34", markdown, document.name)

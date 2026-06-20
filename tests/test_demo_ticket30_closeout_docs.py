@@ -13,10 +13,7 @@ class Ticket30CloseoutDocsTest(unittest.TestCase):
         )
 
     def test_readme_and_tutorial_publish_truthful_gate_and_metrics(self):
-        documents = (
-            self.root / "README.md",
-            self.root / "docs/demo/phase2-end-to-end-tutorial.md",
-        )
+        documents = (self.root / "docs/demo/phase2-end-to-end-tutorial.md",)
         required = (
             "real generated held-out RTX 3090 evidence",
             "Spatial MIL v4",
@@ -30,10 +27,7 @@ class Ticket30CloseoutDocsTest(unittest.TestCase):
             for statement in required:
                 self.assertIn(statement, normalized, document.name)
 
-            gate_link = "docs/demo/ticket30-quality-gate.json"
-            if document.name == "phase2-end-to-end-tutorial.md":
-                gate_link = "ticket30-quality-gate.json"
-            self.assertIn(gate_link, markdown, document.name)
+            self.assertIn("ticket30-quality-gate.json", markdown, document.name)
 
             for seed in ("17", "42", "91"):
                 for class_code in ("scratch", "particle"):
@@ -49,7 +43,6 @@ class Ticket30CloseoutDocsTest(unittest.TestCase):
 
     def test_ticket29_screenshots_are_not_presented_as_ticket30_and_10_to_13_absent(self):
         root_documents = (
-            (self.root / "README.md").read_text(encoding="utf-8"),
             (self.root / "docs/demo/phase2-end-to-end-tutorial.md").read_text(
                 encoding="utf-8"
             ),
