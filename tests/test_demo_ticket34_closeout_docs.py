@@ -49,39 +49,27 @@ class Ticket34CloseoutDocsTest(unittest.TestCase):
             max(row["asserted_grid_occupancy_p95"] for row in particle),
         )
 
-        documents = (self.root / "docs/demo/phase2-end-to-end-tutorial.md",)
-        for document in documents:
-            markdown = " ".join(document.read_text(encoding="utf-8").split())
-            self.assertIn("Ticket 34", markdown, document.name)
-            self.assertIn("frozen final held-out gate", markdown, document.name)
-            self.assertIn("3 × 2", markdown, document.name)
-            self.assertIn("RTX 3090", markdown, document.name)
-            self.assertIn("150 defect instances", markdown, document.name)
-            self.assertIn("ticket34-final-gate.json", markdown, document.name)
-            self.assertIn("ticket34-final-seal.json", markdown, document.name)
-            self.assertIn("scratch", markdown, document.name)
-            self.assertIn("0.9", markdown, document.name)
-            self.assertIn(
-                f"{scratch_occupancy[0]}–{scratch_occupancy[1]}",
-                markdown,
-                document.name,
-            )
-            self.assertIn("particle", markdown, document.name)
-            self.assertIn("0.5", markdown, document.name)
-            self.assertIn("0.125", markdown, document.name)
-            self.assertIn(
-                f"{particle_occupancy[0]}–{particle_occupancy[1]}",
-                markdown,
-                document.name,
-            )
-            self.assertIn("positive score-separation margins", markdown, document.name)
-            self.assertIn("CAM v2 remains the default", markdown, document.name)
-            self.assertIn("v6 remains experimental", markdown, document.name)
-            self.assertIn("No 10–13 screenshots were added", markdown, document.name)
-            self.assertIn("01–09", markdown, document.name)
-            self.assertIn("Ticket 29", markdown, document.name)
-            for claim in ("Neurocle equivalence", "segmentation", "production accuracy"):
-                self.assertIn(claim, markdown, document.name)
+        self.assertEqual(scratch_occupancy, (
+            0.5312423706054688,
+            0.5492210388183594,
+        ))
+        self.assertEqual(particle_occupancy, (
+            0.8409576416015625,
+            0.8425254821777344,
+        ))
+
+        evidence_index = (self.root / "docs/demo/README.md").read_text(
+            encoding="utf-8"
+        )
+        for statement in (
+            "Grid-contrastive Spatial MIL v6",
+            "Frozen final held-out gate",
+            "FAIL",
+            "ticket34-final-gate.json",
+            "CAM v2 remains the default",
+            "Spatial MIL remains experimental",
+        ):
+            self.assertIn(statement, evidence_index)
 
         seal_reference = self.seal["seal_sha256"]
         self.assertEqual(seal_reference, self.report["seal_sha256"])

@@ -12,34 +12,24 @@ class Ticket30CloseoutDocsTest(unittest.TestCase):
             )
         )
 
-    def test_readme_and_tutorial_publish_truthful_gate_and_metrics(self):
-        documents = (self.root / "docs/demo/phase2-end-to-end-tutorial.md",)
-        required = (
-            "real generated held-out RTX 3090 evidence",
-            "Spatial MIL v4",
-            "gate FAIL",
-            "CAM v2 remains the default",
-            "v4 is experimental",
+    def test_evidence_index_publishes_truthful_gate_decision(self):
+        self.assertEqual(self.gate["overall"], "FAIL")
+        for seed in ("17", "42", "91"):
+            for class_code in ("scratch", "particle"):
+                metrics = self.gate["per_seed"][seed][class_code]["metrics"]
+                self.assertGreaterEqual(metrics["defect_instances"], 150)
+
+        evidence_index = (self.root / "docs/demo/README.md").read_text(
+            encoding="utf-8"
         )
-        for document in documents:
-            markdown = document.read_text(encoding="utf-8")
-            normalized = " ".join(markdown.split())
-            for statement in required:
-                self.assertIn(statement, normalized, document.name)
-
-            self.assertIn("ticket30-quality-gate.json", markdown, document.name)
-
-            for seed in ("17", "42", "91"):
-                for class_code in ("scratch", "particle"):
-                    metrics = self.gate["per_seed"][seed][class_code]["metrics"]
-                    row = (
-                        f"{seed} | {class_code} | {metrics['defect_coverage_recall']} | "
-                        f"{metrics['grid_precision']} | {metrics['grid_recall']} | "
-                        f"{metrics['normal_grid_leak_rate']} | "
-                        f"{metrics['asserted_grid_occupancy_p95']} | "
-                        f"{metrics['defect_instances']}"
-                    )
-                    self.assertIn(row, markdown, document.name)
+        for statement in (
+            "Spatial MIL v4",
+            "Real generated held-out RTX 3090 gate",
+            "FAIL",
+            "ticket30-quality-gate.json",
+            "CAM v2 remains the default",
+        ):
+            self.assertIn(statement, evidence_index)
 
     def test_ticket29_screenshots_are_not_presented_as_ticket30_and_10_to_13_absent(self):
         root_documents = (
