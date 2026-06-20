@@ -89,12 +89,11 @@ driver, and available CUDA device.
 ```powershell
 conda create -n wafer-defect-studio python=3.11 -y
 conda activate wafer-defect-studio
-python -m pip install numpy torch torchvision
 python -m pip install -e .
 ```
 
 For GPU use, install the CUDA-enabled PyTorch build appropriate for the target
-machine, then verify the runtime:
+machine before the editable install, then verify the runtime:
 
 ```powershell
 python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
