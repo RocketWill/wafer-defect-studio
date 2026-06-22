@@ -26,6 +26,13 @@ class PublicReadmeTest(unittest.TestCase):
         for local_reference in (".scratch", "docs/agents", "E:\\", "AGENTS.md"):
             self.assertNotIn(local_reference, readme)
 
+        architecture_svg = "docs/diagrams/wafer-defect-studio-architecture.svg"
+        architecture_source = "docs/diagrams/wafer-defect-studio-architecture.html"
+        self.assertIn(f"]({architecture_svg})", readme)
+        self.assertIn(f"]({architecture_source})", readme)
+        self.assertTrue((root / architecture_svg).is_file())
+        self.assertTrue((root / architecture_source).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

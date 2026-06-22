@@ -73,6 +73,16 @@ model path.
   proposal provenance.
 - CSV, JSON, and native-size PNG export in source-image coordinates.
 
+## Architecture
+
+![Wafer Defect Studio architecture showing the PySide6 workspaces, single-writer project service, worker processes, SQLite metadata, and filesystem artifacts](docs/diagrams/wafer-defect-studio-architecture.svg)
+
+The PySide6 workspaces send project commands through one project service. The
+service is the only SQLite writer, starts isolated worker processes, records
+project state, and validates staged model and run artifacts before publication.
+The [standalone architecture diagram](docs/diagrams/wafer-defect-studio-architecture.html)
+uses the same color system as the application UI.
+
 ## Requirements
 
 - Windows 10 or newer
@@ -170,6 +180,7 @@ src/wafer_defect_studio/    Application, domain services, workers, and Widgets
 tests/                      Unit, integration, UI-smoke, and validation tests
 benchmarks/                 First-display and interaction measurements
 docs/adr/                   Architectural decisions
+docs/diagrams/              Architecture diagram and standalone source
 docs/demo/                  Reproducible demos, reports, and screenshots
 docs/images/                Public interface screenshots
 ```
