@@ -181,3 +181,7 @@ as the local metadata source of truth. Model outputs are Defect Confidence Maps
 and Defect Proposals derived from grid supervision. Production inspection
 accuracy requires evaluation on representative acquisition data and acceptance
 criteria defined for the intended deployment.
+
+## License
+
+Wafer Defect Studio is available under the [MIT License](LICENSE).
