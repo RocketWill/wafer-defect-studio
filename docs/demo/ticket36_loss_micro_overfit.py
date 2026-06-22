@@ -10,12 +10,17 @@ import argparse
 import json
 import math
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
 import numpy as np
 import torch
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 
 from docs.demo.defect_oracle import Particle, Scratch
 from docs.demo.ticket35_development_corpus import DevelopmentInstance
